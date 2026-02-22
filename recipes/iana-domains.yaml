@@ -1,0 +1,25 @@
+id: iana-domains
+name: IANA Domains
+version: 1.0.0
+description: Collects IANA reserved domains page.
+match:
+  patterns:
+    - "www.iana.org/domains/**"
+requiresBrowser: false
+steps:
+  - type: goto
+    args:
+      url: https://www.iana.org/domains/reserved
+  - type: waitForSelector
+    args:
+      selector: "h1"
+      timeoutMs: 20000
+extraction:
+  mode: selectors
+  selectors:
+    title: "title"
+    h1: "h1"
+    intro: "p"
+throttling:
+  minDelayMs: 1000
+  concurrencyHint: 1

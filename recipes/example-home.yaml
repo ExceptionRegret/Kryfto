@@ -1,0 +1,27 @@
+id: example-home
+name: Example Home
+version: 1.0.0
+description: Collects the Example Domain landing page.
+match:
+  patterns:
+    - "example.com/**"
+requiresBrowser: false
+steps:
+  - type: goto
+    args:
+      url: https://example.com/
+  - type: waitForNetworkIdle
+    args:
+      timeoutMs: 15000
+  - type: screenshot
+    args:
+      name: example-home
+extraction:
+  mode: selectors
+  selectors:
+    title: "title"
+    heading: "h1"
+    body_text: "body"
+throttling:
+  minDelayMs: 500
+  concurrencyHint: 1

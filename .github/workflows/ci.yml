@@ -1,0 +1,97 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Build and start compose
+        run: docker compose up -d --build
+
+      - name: Wait for API
+        run: |
+          for i in {1..60}; do
+            if curl -sf http://localhost:8080/v1/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "API did not become healthy in time"
+          docker compose logs api worker
+          exit 1
+
+      - name: Integration tests
+        env:
+          COLLECTOR_BASE_URL: http://localhost:8080
+          COLLECTOR_API_TOKEN: dev_admin_token_change_me
+        run: pnpm test:integration
+
+      - name: E2E tests
+        env:
+          COLLECTOR_BASE_URL: http://localhost:8080
+          COLLECTOR_API_TOKEN: dev_admin_token_change_me
+        run: pnpm test:e2e
+
+      - name: Docker image scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Shutdown compose
+        if: always()
+        run: docker compose down -v

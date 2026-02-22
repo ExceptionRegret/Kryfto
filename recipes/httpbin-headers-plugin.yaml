@@ -1,0 +1,18 @@
+id: httpbin-headers-plugin
+name: HTTPBin Headers Plugin
+version: 1.0.0
+description: Uses plugin extraction for httpbin headers endpoint.
+match:
+  patterns:
+    - "httpbin.org/**"
+requiresBrowser: false
+steps:
+  - type: goto
+    args:
+      url: https://httpbin.org/headers
+extraction:
+  mode: plugin
+  plugin: recipes/plugins/httpbin-headers-plugin.mjs
+throttling:
+  minDelayMs: 250
+  concurrencyHint: 1

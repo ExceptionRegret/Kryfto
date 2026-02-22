@@ -1,0 +1,437 @@
+import { load } from 'cheerio';
+
+export type SafeSearchMode = 'strict' | 'moderate' | 'off';
+export type SearchEngineProvider = 'duckduckgo' | 'bing' | 'yahoo' | 'google' | 'brave';
+
+export type ParsedSearchResult = {
+  title: string;
+  url: string;
+  snippet?: string;
+  rank: number;
+};
+
+function maybeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeDuckDuckGoResultUrl(rawHref: string): string {
+  if (!rawHref) return rawHref;
+
+  try {
+    const withBase = new URL(rawHref, 'https://duckduckgo.com');
+    const redirected = withBase.searchParams.get('uddg');
+    if (redirected) {
+      return maybeDecodeURIComponent(redirected);
+    }
+    return withBase.toString();
+  } catch {
+    return rawHref;
+  }
+}
+
+function normalizeYahooResultUrl(rawHref: string): string {
+  if (!rawHref) return rawHref;
+  try {
+    const withBase = new URL(rawHref, 'https://search.yahoo.com');
+    const redirected = withBase.searchParams.get('RU');
+    if (redirected) {
+      return maybeDecodeURIComponent(redirected);
+    }
+    return withBase.toString();
+  } catch {
+    return rawHref;
+  }
+}
+
+function normalizeBingResultUrl(rawHref: string): string {
+  if (!rawHref) return rawHref;
+  try {
+    return new URL(rawHref, 'https://www.bing.com').toString();
+  } catch {
+    return rawHref;
+  }
+}
+
+function toLocaleParts(locale: string): { region: string; language: string; mkt: string } {
+  const fallback = { region: 'us', language: 'en', mkt: 'en-US' };
+  const parts = locale.toLowerCase().split('-');
+  if (parts.length !== 2) {
+    return fallback;
+  }
+  const [region, language] = parts;
+  if (!region || !language) {
+    return fallback;
+  }
+  return {
+    region,
+    language,
+    mkt: `${language}-${region.toUpperCase()}`,
+  };
+}
+
+export function safeSearchToBing(mode: SafeSearchMode): 'Strict' | 'Moderate' | 'Off' {
+  if (mode === 'strict') return 'Strict';
+  if (mode === 'off') return 'Off';
+  return 'Moderate';
+}
+
+export function safeSearchToGoogle(mode: SafeSearchMode): 'active' | 'off' {
+  return mode === 'off' ? 'off' : 'active';
+}
+
+export function safeSearchToBrave(mode: SafeSearchMode): 'strict' | 'moderate' | 'off' {
+  if (mode === 'strict') return 'strict';
+  if (mode === 'off') return 'off';
+  return 'moderate';
+}
+
+export function buildDuckDuckGoSearchUrl(params: { query: string; safeSearch: SafeSearchMode; locale: string }): string {
+  const safeSearchMap: Record<SafeSearchMode, string> = {
+    off: '-1',
+    moderate: '0',
+    strict: '1',
+  };
+
+  const url = new URL('https://html.duckduckgo.com/html/');
+  url.searchParams.set('q', params.query);
+  url.searchParams.set('kl', params.locale);
+  url.searchParams.set('kp', safeSearchMap[params.safeSearch]);
+  return url.toString();
+}
+
+export function buildBingHtmlSearchUrl(params: { query: string; safeSearch: SafeSearchMode; locale: string }): string {
+  const localeParts = toLocaleParts(params.locale);
+  const url = new URL('https://www.bing.com/search');
+  url.searchParams.set('q', params.query);
+  url.searchParams.set('setlang', localeParts.language);
+  url.searchParams.set('cc', localeParts.region.toUpperCase());
+  url.searchParams.set('adlt', params.safeSearch === 'strict' ? 'strict' : 'off');
+  return url.toString();
+}
+
+export function buildYahooSearchUrl(params: { query: string; safeSearch: SafeSearchMode; locale: string }): string {
+  const localeParts = toLocaleParts(params.locale);
+  const url = new URL('https://search.yahoo.com/search');
+  url.searchParams.set('p', params.query);
+  url.searchParams.set('ei', 'UTF-8');
+  url.searchParams.set('vl', localeParts.language);
+  url.searchParams.set('fr2', 'piv-web');
+  url.searchParams.set('vm', params.safeSearch === 'strict' ? 'r' : 'p');
+  return url.toString();
+}
+
+export function buildGoogleHtmlSearchUrl(params: { query: string; safeSearch: SafeSearchMode; locale: string }): string {
+  const localeParts = toLocaleParts(params.locale);
+  const url = new URL('https://www.google.com/search');
+  url.searchParams.set('q', params.query);
+  url.searchParams.set('hl', localeParts.language);
+  url.searchParams.set('gl', localeParts.region);
+  url.searchParams.set('safe', safeSearchToGoogle(params.safeSearch));
+  return url.toString();
+}
+
+export function buildBraveHtmlSearchUrl(params: { query: string; safeSearch: SafeSearchMode; locale: string }): string {
+  const localeParts = toLocaleParts(params.locale);
+  const url = new URL('https://search.brave.com/search');
+  url.searchParams.set('q', params.query);
+  url.searchParams.set('source', 'web');
+  url.searchParams.set('country', localeParts.region.toUpperCase());
+  url.searchParams.set('search_lang', localeParts.language);
+  url.searchParams.set('safesearch', safeSearchToBrave(params.safeSearch));
+  return url.toString();
+}
+
+function normalizeGoogleResultUrl(rawHref: string): string {
+  if (!rawHref) return rawHref;
+  try {
+    const withBase = new URL(rawHref, 'https://www.google.com');
+    const redirected = withBase.searchParams.get('q');
+    if (withBase.pathname === '/url' && redirected) {
+      return redirected;
+    }
+    return withBase.toString();
+  } catch {
+    return rawHref;
+  }
+}
+
+export function parseDuckDuckGoSearchResults(html: string, limit: number): ParsedSearchResult[] {
+  const $ = load(html);
+  const results: ParsedSearchResult[] = [];
+
+  $('div.result').each((_index, element) => {
+    if (results.length >= limit) {
+      return false;
+    }
+
+    const anchor = $(element).find('a.result__a').first();
+    const title = anchor.text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+    if (!title || !href) {
+      return;
+    }
+
+    const snippet = $(element).find('.result__snippet').first().text().trim() || undefined;
+    results.push({
+      title,
+      url: normalizeDuckDuckGoResultUrl(href),
+      ...(snippet ? { snippet } : {}),
+      rank: results.length + 1,
+    });
+  });
+
+  return results;
+}
+
+export function parseBingHtmlSearchResults(html: string, limit: number): ParsedSearchResult[] {
+  const $ = load(html);
+  const results: ParsedSearchResult[] = [];
+
+  $('li.b_algo').each((_index, element) => {
+    if (results.length >= limit) {
+      return false;
+    }
+
+    const anchor = $(element).find('h2 a').first();
+    const title = anchor.text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+    if (!title || !href) {
+      return;
+    }
+
+    const snippet = $(element).find('.b_caption p').first().text().trim() || undefined;
+    results.push({
+      title,
+      url: normalizeBingResultUrl(href),
+      ...(snippet ? { snippet } : {}),
+      rank: results.length + 1,
+    });
+  });
+
+  return results;
+}
+
+export function parseYahooSearchResults(html: string, limit: number): ParsedSearchResult[] {
+  const $ = load(html);
+  const results: ParsedSearchResult[] = [];
+
+  $('div#web ol li, div#web .algo').each((_index, element) => {
+    if (results.length >= limit) {
+      return false;
+    }
+
+    const anchor = $(element).find('h3 a').first();
+    const title = anchor.text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+    if (!title || !href) {
+      return;
+    }
+
+    const snippet =
+      $(element).find('.compText p').first().text().trim() ||
+      $(element).find('p').first().text().trim() ||
+      undefined;
+
+    results.push({
+      title,
+      url: normalizeYahooResultUrl(href),
+      ...(snippet ? { snippet } : {}),
+      rank: results.length + 1,
+    });
+  });
+
+  return results;
+}
+
+export function parseGoogleHtmlSearchResults(html: string, limit: number): ParsedSearchResult[] {
+  const $ = load(html);
+  const results: ParsedSearchResult[] = [];
+
+  // Method 1: Target generalized result blocks in mobile/fallback HTML
+  $('div > a:has(h3)').each((_index, element) => {
+    if (results.length >= limit) {
+      return false;
+    }
+
+    const anchor = $(element);
+    const title = anchor.find('h3').first().text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+
+    if (!title || !href) {
+      return;
+    }
+
+    const normalizedUrl = normalizeGoogleResultUrl(href);
+    if (!normalizedUrl.startsWith('http')) {
+      return;
+    }
+
+    if (normalizedUrl.includes('google.com/')) {
+      return;
+    }
+
+    // Try to find accompanying text snippets nearby (highly variable)
+    const snippetNode = anchor.parent().next('div');
+    const snippet = snippetNode.text().trim() || undefined;
+
+    // Deduplicate on URL
+    if (results.some((r) => r.url === normalizedUrl)) {
+      return;
+    }
+
+    results.push({
+      title,
+      url: normalizedUrl,
+      ...(snippet ? { snippet } : {}),
+      rank: results.length + 1,
+    });
+  });
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  $('a h3').each((_index, heading) => {
+    if (results.length >= limit) {
+      return false;
+    }
+
+    const anchor = $(heading).closest('a');
+    const title = $(heading).text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+    if (!title || !href) return;
+
+    const normalizedUrl = normalizeGoogleResultUrl(href);
+    if (!normalizedUrl.startsWith('http') || normalizedUrl.includes('google.com/')) return;
+
+    results.push({
+      title,
+      url: normalizedUrl,
+      rank: results.length + 1,
+    });
+  });
+
+  return results;
+}
+
+export function parseBraveHtmlSearchResults(html: string, limit: number): ParsedSearchResult[] {
+  const $ = load(html);
+  const results: ParsedSearchResult[] = [];
+  const seen = new Set<string>();
+
+  const pushResult = (title: string, href: string, snippet?: string): void => {
+    if (results.length >= limit) return;
+    if (!title || !href) return;
+    if (!href.startsWith('http')) return;
+    if (seen.has(href)) return;
+    seen.add(href);
+    results.push({
+      title,
+      url: href,
+      ...(snippet ? { snippet } : {}),
+      rank: results.length + 1,
+    });
+  };
+
+  $('a.heading-serpresult, a.result-header').each((_index, element) => {
+    const anchor = $(element);
+    const title = anchor.text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+    const snippet =
+      anchor.closest('.snippet').find('.snippet-description').first().text().trim() ||
+      anchor.closest('.snippet').find('p').first().text().trim() ||
+      undefined;
+    pushResult(title, href, snippet);
+  });
+
+  if (results.length > 0) {
+    return results;
+  }
+
+  $('a[href^="http"]').each((_index, element) => {
+    if (results.length >= limit) {
+      return false;
+    }
+    const anchor = $(element);
+    const title = anchor.text().trim();
+    const href = anchor.attr('href')?.trim() ?? '';
+    if (!title || title.length < 5) {
+      return;
+    }
+    if (href.includes('search.brave.com')) {
+      return;
+    }
+    pushResult(title, href);
+  });
+
+  return results;
+}
+
+export function parseGoogleCustomSearchResults(payload: unknown, limit: number): ParsedSearchResult[] {
+  const typed = payload as {
+    items?: Array<{ title?: string; link?: string; snippet?: string }>;
+  };
+
+  const results: ParsedSearchResult[] = [];
+  for (const item of typed.items ?? []) {
+    if (results.length >= limit) break;
+    if (!item?.title || !item?.link) continue;
+    results.push({
+      title: item.title,
+      url: item.link,
+      ...(item.snippet ? { snippet: item.snippet } : {}),
+      rank: results.length + 1,
+    });
+  }
+  return results;
+}
+
+export function parseBingApiSearchResults(payload: unknown, limit: number): ParsedSearchResult[] {
+  const typed = payload as {
+    webPages?: {
+      value?: Array<{ name?: string; url?: string; snippet?: string }>;
+    };
+  };
+
+  const results: ParsedSearchResult[] = [];
+  for (const item of typed.webPages?.value ?? []) {
+    if (results.length >= limit) break;
+    if (!item?.name || !item?.url) continue;
+    results.push({
+      title: item.name,
+      url: item.url,
+      ...(item.snippet ? { snippet: item.snippet } : {}),
+      rank: results.length + 1,
+    });
+  }
+  return results;
+}
+
+export function parseBraveApiSearchResults(payload: unknown, limit: number): ParsedSearchResult[] {
+  const typed = payload as {
+    web?: {
+      results?: Array<{ title?: string; url?: string; description?: string }>;
+    };
+  };
+
+  const results: ParsedSearchResult[] = [];
+  for (const item of typed.web?.results ?? []) {
+    if (results.length >= limit) break;
+    if (!item?.title || !item?.url) continue;
+    results.push({
+      title: item.title,
+      url: item.url,
+      ...(item.description ? { snippet: item.description } : {}),
+      rank: results.length + 1,
+    });
+  }
+  return results;
+}
+
+export function localeParts(locale: string): { region: string; language: string; mkt: string } {
+  return toLocaleParts(locale);
+}

@@ -1,0 +1,213 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    env_file: .env
+    environment:
+      KRYFTO_ARTIFACT_BACKEND: s3
+    ports:
+      - "${KRYFTO_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      createbuckets:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    env_file: .env
+    environment:
+      KRYFTO_ARTIFACT_BACKEND: s3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      createbuckets:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-collector}
+      POSTGRES_USER: ${POSTGRES_USER:-collector}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-collector_password_change_me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collector} -d ${POSTGRES_DB:-collector}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local ${S3_ENDPOINT:-http://minio:9000} ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin};
+      /usr/bin/mc mb -p local/${S3_BUCKET:-collector-artifacts} || true;
+      exit 0;
+      "
+
+  api-lite:
+    profiles: ["lite"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    env_file: .env
+    environment:
+      KRYFTO_ARTIFACT_BACKEND: local
+      KRYFTO_LOCAL_ARTIFACT_DIR: /data/artifacts
+      POSTGRES_HOST: postgres-lite
+      POSTGRES_PORT: 5432
+      S3_ENDPOINT: ""
+      S3_BUCKET: ""
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres-lite:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - litestorage:/data
+
+  worker-lite:
+    profiles: ["lite"]
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    env_file: .env
+    environment:
+      KRYFTO_ARTIFACT_BACKEND: local
+      KRYFTO_LOCAL_ARTIFACT_DIR: /data/artifacts
+      POSTGRES_HOST: postgres-lite
+      POSTGRES_PORT: 5432
+      S3_ENDPOINT: ""
+      S3_BUCKET: ""
+    depends_on:
+      postgres-lite:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - litestorage:/data
+
+  postgres-lite:
+    profiles: ["lite"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-collector}
+      POSTGRES_USER: ${POSTGRES_USER:-collector}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-collector_password_change_me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collector} -d ${POSTGRES_DB:-collector}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafanadata:/var/lib/grafana
+
+  worker-ui:
+    profiles: ["ui"]
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    env_file: .env
+    environment:
+      KRYFTO_UI_MODE: "true"
+      WORKER_GLOBAL_CONCURRENCY: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      createbuckets:
+        condition: service_completed_successfully
+
+  browser-ui:
+    profiles: ["ui"]
+    image: accetto/ubuntu-vnc-xfce-chromium-g3
+    ports:
+      - "6901:6901"
+    environment:
+      VNC_PW: collector
+
+  py-extractor:
+    profiles: ["py-extractor"]
+    build:
+      context: .
+      dockerfile: docker/py-extractor.Dockerfile
+    ports:
+      - "8090:8090"
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  litestorage:
+  grafanadata:

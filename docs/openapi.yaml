@@ -1,0 +1,574 @@
+openapi: 3.1.0
+info:
+  title: Self-hosted Browser Data Collection Runtime API
+  version: 1.0.0
+  description: Production-grade runtime exposing collection and crawl capabilities for IDE agents.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+            requestId: { type: string }
+    Role:
+      type: string
+      enum: [admin, developer, readonly]
+    JobState:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled, expired]
+    BrowserEngine:
+      type: string
+      enum: [chromium, firefox, webkit]
+    Step:
+      oneOf:
+        - $ref: '#/components/schemas/StepGoto'
+        - $ref: '#/components/schemas/StepSetHeaders'
+        - $ref: '#/components/schemas/StepSetCookies'
+        - $ref: '#/components/schemas/StepExportCookies'
+        - $ref: '#/components/schemas/StepWaitForSelector'
+        - $ref: '#/components/schemas/StepClick'
+        - $ref: '#/components/schemas/StepType'
+        - $ref: '#/components/schemas/StepScroll'
+        - $ref: '#/components/schemas/StepWait'
+        - $ref: '#/components/schemas/StepWaitForNetworkIdle'
+        - $ref: '#/components/schemas/StepPaginate'
+        - $ref: '#/components/schemas/StepScreenshot'
+        - $ref: '#/components/schemas/StepExtract'
+    StepGoto:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: goto }
+        args:
+          type: object
+          required: [url]
+          properties:
+            url: { type: string, format: uri }
+    StepSetHeaders:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: setHeaders }
+        args:
+          type: object
+          required: [headers]
+          properties:
+            headers:
+              type: object
+              additionalProperties: { type: string }
+    StepSetCookies:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: setCookies }
+        args:
+          type: object
+          required: [cookies]
+          properties:
+            cookies:
+              type: array
+              items:
+                type: object
+                required: [name, value]
+                properties:
+                  name: { type: string }
+                  value: { type: string }
+                  domain: { type: string }
+                  path: { type: string }
+                  expires: { type: number }
+                  httpOnly: { type: boolean }
+                  secure: { type: boolean }
+                  sameSite: { type: string, enum: [Strict, Lax, None] }
+    StepExportCookies:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, const: exportCookies }
+        args: { type: object }
+    StepWaitForSelector:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: waitForSelector }
+        args:
+          type: object
+          required: [selector]
+          properties:
+            selector: { type: string }
+            timeoutMs: { type: integer, minimum: 1 }
+    StepClick:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: click }
+        args:
+          type: object
+          required: [selector]
+          properties:
+            selector: { type: string }
+    StepType:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: type }
+        args:
+          type: object
+          required: [selector, text]
+          properties:
+            selector: { type: string }
+            text: { type: string }
+            secret: { type: boolean }
+    StepScroll:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: scroll }
+        args:
+          type: object
+          required: [direction, amount]
+          properties:
+            direction: { type: string, enum: [up, down] }
+            amount: { type: integer, minimum: 1 }
+    StepWait:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: wait }
+        args:
+          type: object
+          required: [ms]
+          properties:
+            ms: { type: integer, minimum: 1 }
+    StepWaitForNetworkIdle:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: waitForNetworkIdle }
+        args:
+          type: object
+          properties:
+            timeoutMs: { type: integer, minimum: 1 }
+    StepPaginate:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: paginate }
+        args:
+          type: object
+          required: [nextSelector]
+          properties:
+            nextSelector: { type: string }
+            maxPages: { type: integer, minimum: 1, maximum: 100 }
+            stopCondition: { type: string }
+    StepScreenshot:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: screenshot }
+        args:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+    StepExtract:
+      type: object
+      required: [type, args]
+      properties:
+        type: { type: string, const: extract }
+        args:
+          $ref: '#/components/schemas/ExtractionConfig'
+    ExtractionConfig:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [selectors, schema, plugin] }
+        selectors:
+          type: object
+          additionalProperties: { type: string }
+        jsonSchema: { type: object }
+        plugin: { type: string }
+    JobOptions:
+      type: object
+      properties:
+        requiresBrowser: { type: boolean }
+        browserEngine: { $ref: '#/components/schemas/BrowserEngine' }
+        respectRobotsTxt: { type: boolean, default: true }
+        timeoutMs: { type: integer, minimum: 1000 }
+        interactiveLogin: { type: boolean, default: false }
+    JobCreateRequest:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri }
+        recipeId: { type: string }
+        options: { $ref: '#/components/schemas/JobOptions' }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/Step' }
+        extract:
+          $ref: '#/components/schemas/ExtractionConfig'
+    Job:
+      type: object
+      required: [id, projectId, state, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        state: { $ref: '#/components/schemas/JobState' }
+        url: { type: string }
+        requestId: { type: string }
+        attempts: { type: integer }
+        maxAttempts: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        resultSummary: { type: object }
+        errorMessage: { type: string }
+    Artifact:
+      type: object
+      required: [id, jobId, type, byteSize, sha256]
+      properties:
+        id: { type: string }
+        jobId: { type: string }
+        projectId: { type: string }
+        type: { type: string }
+        path: { type: string }
+        byteSize: { type: integer }
+        sha256: { type: string }
+        createdAt: { type: string, format: date-time }
+        downloadToken: { type: string }
+        downloadTokenExpiresAt: { type: string, format: date-time }
+    ExtractRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [selectors, schema, plugin] }
+        html: { type: string }
+        text: { type: string }
+        artifactId: { type: string }
+        selectors:
+          type: object
+          additionalProperties: { type: string }
+        jsonSchema: { type: object }
+        plugin: { type: string }
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1, maxLength: 512 }
+        limit: { type: integer, minimum: 1, maximum: 20, default: 10 }
+        engine: { type: string, enum: [duckduckgo, bing, yahoo, google, brave], default: duckduckgo }
+        safeSearch: { type: string, enum: [strict, moderate, off], default: moderate }
+        locale: { type: string, default: us-en }
+    SearchResult:
+      type: object
+      required: [title, url, rank]
+      properties:
+        title: { type: string }
+        url: { type: string }
+        snippet: { type: string }
+        rank: { type: integer }
+    CrawlRules:
+      type: object
+      properties:
+        allowPatterns:
+          type: array
+          items: { type: string }
+        denyPatterns:
+          type: array
+          items: { type: string }
+        maxDepth: { type: integer, minimum: 0, maximum: 5, default: 1 }
+        maxPages: { type: integer, minimum: 1, maximum: 500, default: 20 }
+        sameDomainOnly: { type: boolean, default: true }
+        politenessDelayMs: { type: integer, minimum: 0, default: 500 }
+    CrawlRequest:
+      type: object
+      required: [seed]
+      properties:
+        seed: { type: string, format: uri }
+        rules: { $ref: '#/components/schemas/CrawlRules' }
+        recipeId: { type: string }
+        extract: { $ref: '#/components/schemas/ExtractionConfig' }
+    CrawlStatus:
+      type: object
+      required: [id, state, seed, createdAt]
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        state: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        seed: { type: string }
+        stats: { type: object }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Recipe:
+      type: object
+      required: [id, name, version, match, requiresBrowser]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        match:
+          type: object
+          required: [patterns]
+          properties:
+            patterns:
+              type: array
+              items: { type: string }
+        requiresBrowser: { type: boolean }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/Step' }
+        extraction:
+          $ref: '#/components/schemas/ExtractionConfig'
+        throttling:
+          type: object
+          properties:
+            minDelayMs: { type: integer, minimum: 0 }
+            concurrencyHint: { type: integer, minimum: 1 }
+        pluginPath: { type: string }
+
+paths:
+  /v1/jobs:
+    post:
+      summary: Create collection job
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCreateRequest'
+      responses:
+        '202':
+          description: queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string }
+                  state: { $ref: '#/components/schemas/JobState' }
+                  requestId: { type: string }
+                  idempotencyKey: { type: string }
+        '400':
+          description: validation error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /v1/jobs/{jobId}:
+    get:
+      summary: Get job status + result summary
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: job details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+  /v1/jobs/{jobId}/logs:
+    get:
+      summary: Stream job logs
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /v1/jobs/{jobId}/cancel:
+    post:
+      summary: Cancel job
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string }
+      responses:
+        '202':
+          description: cancellation requested
+  /v1/jobs/{jobId}/artifacts:
+    get:
+      summary: List artifacts for a job
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Artifact' }
+  /v1/artifacts/{artifactId}:
+    get:
+      summary: Download artifact (authorized)
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: downloadToken
+          schema: { type: string }
+      responses:
+        '200':
+          description: binary artifact bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /v1/extract:
+    post:
+      summary: Run extraction against HTML/text or artifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExtractRequest' }
+      responses:
+        '200':
+          description: extraction output
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {}
+                  mode: { type: string }
+  /v1/search:
+    post:
+      summary: Run web search query and return normalized results
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SearchRequest' }
+      responses:
+        '200':
+          description: search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string }
+                  limit: { type: integer }
+                  engine: { type: string }
+                  safeSearch: { type: string }
+                  locale: { type: string }
+                  requestId: { type: string }
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/SearchResult' }
+  /v1/crawl:
+    post:
+      summary: Start crawl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CrawlRequest' }
+      responses:
+        '202':
+          description: crawl queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  crawlId: { type: string }
+                  state: { type: string }
+                  requestId: { type: string }
+  /v1/crawl/{crawlId}:
+    get:
+      summary: Crawl status + summary
+      parameters:
+        - in: path
+          name: crawlId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: crawl status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CrawlStatus' }
+  /v1/recipes/validate:
+    post:
+      summary: Validate recipe file payload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+      responses:
+        '200':
+          description: validation result
+  /v1/recipes:
+    get:
+      summary: List recipes
+      responses:
+        '200':
+          description: list
+    post:
+      summary: Upload/register recipe (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Recipe' }
+      responses:
+        '201':
+          description: created
+  /v1/healthz:
+    get:
+      security: []
+      summary: Liveness
+      responses:
+        '200': { description: ok }
+  /v1/readyz:
+    get:
+      security: []
+      summary: Readiness
+      responses:
+        '200': { description: ready }
+  /v1/metrics:
+    get:
+      security: []
+      summary: Prometheus metrics
+      responses:
+        '200': { description: metrics }

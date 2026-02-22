@@ -1,0 +1,138 @@
+spec:
+  name: kryfto
+  region: nyc
+  alerts:
+    - rule: DEPLOYMENT_FAILED
+    - rule: DOMAIN_FAILED
+
+  databases:
+    - engine: PG
+      name: collector-db
+      num_nodes: 1
+      size: db-s-1vcpu-1gb
+      version: "16"
+    - engine: REDIS
+      name: collector-redis
+      num_nodes: 1
+      size: db-s-1vcpu-1gb
+      version: "7"
+
+  services:
+    - name: api
+      dockerfile_path: docker/api.Dockerfile
+      source_dir: /
+      http_port: 8080
+      instance_count: 1
+      instance_size_slug: basic-s
+      health_check:
+        http_path: /v1/healthz
+        initial_delay_seconds: 15
+        period_seconds: 10
+      envs:
+        - key: KRYFTO_PORT
+          value: "8080"
+        - key: KRYFTO_LOG_LEVEL
+          value: info
+        - key: KRYFTO_PROJECT_ID
+          value: default
+        - key: KRYFTO_API_TOKEN
+          type: SECRET
+          value: "change-me-generate-a-strong-token"
+        - key: KRYFTO_BOOTSTRAP_ADMIN_TOKEN
+          type: SECRET
+          value: "change-me-generate-a-strong-token"
+        - key: KRYFTO_RATE_LIMIT_RPM
+          value: "120"
+        - key: KRYFTO_JOB_MAX_ATTEMPTS
+          value: "3"
+        - key: KRYFTO_SSRF_BLOCK_PRIVATE_RANGES
+          value: "true"
+        - key: KRYFTO_ARTIFACT_BACKEND
+          value: s3
+        - key: POSTGRES_HOST
+          value: ${collector-db.HOSTNAME}
+        - key: POSTGRES_PORT
+          value: ${collector-db.PORT}
+        - key: POSTGRES_DB
+          value: ${collector-db.DATABASE}
+        - key: POSTGRES_USER
+          value: ${collector-db.USERNAME}
+        - key: POSTGRES_PASSWORD
+          value: ${collector-db.PASSWORD}
+        - key: REDIS_HOST
+          value: ${collector-redis.HOSTNAME}
+        - key: REDIS_PORT
+          value: ${collector-redis.PORT}
+        - key: S3_ENDPOINT
+          value: "https://your-s3-endpoint.com"
+        - key: S3_REGION
+          value: us-east-1
+        - key: S3_ACCESS_KEY
+          type: SECRET
+          value: "change-me"
+        - key: S3_SECRET_KEY
+          type: SECRET
+          value: "change-me"
+        - key: S3_BUCKET
+          value: collector-artifacts
+        - key: S3_FORCE_PATH_STYLE
+          value: "true"
+
+    - name: worker
+      dockerfile_path: docker/worker.Dockerfile
+      source_dir: /
+      instance_count: 1
+      instance_size_slug: professional-s
+      envs:
+        - key: KRYFTO_LOG_LEVEL
+          value: info
+        - key: KRYFTO_PROJECT_ID
+          value: default
+        - key: KRYFTO_API_TOKEN
+          type: SECRET
+          value: "change-me-generate-a-strong-token"
+        - key: KRYFTO_STEALTH_MODE
+          value: "true"
+        - key: KRYFTO_ROTATE_USER_AGENT
+          value: "true"
+        - key: KRYFTO_PROXY_URLS
+          type: SECRET
+          value: ""
+        - key: KRYFTO_SSRF_BLOCK_PRIVATE_RANGES
+          value: "true"
+        - key: KRYFTO_ARTIFACT_BACKEND
+          value: s3
+        - key: POSTGRES_HOST
+          value: ${collector-db.HOSTNAME}
+        - key: POSTGRES_PORT
+          value: ${collector-db.PORT}
+        - key: POSTGRES_DB
+          value: ${collector-db.DATABASE}
+        - key: POSTGRES_USER
+          value: ${collector-db.USERNAME}
+        - key: POSTGRES_PASSWORD
+          value: ${collector-db.PASSWORD}
+        - key: REDIS_HOST
+          value: ${collector-redis.HOSTNAME}
+        - key: REDIS_PORT
+          value: ${collector-redis.PORT}
+        - key: S3_ENDPOINT
+          value: "https://your-s3-endpoint.com"
+        - key: S3_REGION
+          value: us-east-1
+        - key: S3_ACCESS_KEY
+          type: SECRET
+          value: "change-me"
+        - key: S3_SECRET_KEY
+          type: SECRET
+          value: "change-me"
+        - key: S3_BUCKET
+          value: collector-artifacts
+        - key: S3_FORCE_PATH_STYLE
+          value: "true"
+        - key: WORKER_GLOBAL_CONCURRENCY
+          value: "2"
+        - key: WORKER_PER_PROJECT_CONCURRENCY
+          value: "2"
+        - key: WORKER_PER_DOMAIN_CONCURRENCY
+          value: "1"

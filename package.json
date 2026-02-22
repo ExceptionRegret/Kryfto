@@ -1,0 +1,37 @@
+{
+  "name": "kryfto",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "env:generate": "node scripts/generate-env.mjs",
+    "env:generate:s3": "node scripts/generate-env.mjs --backend s3",
+    "test:env": "node scripts/generate-env.test.mjs",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test": "pnpm run test:unit && pnpm run test:integration",
+    "test:unit": "pnpm -r test",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "node scripts/e2e-runner.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.11",
+    "vitest": "^2.1.4"
+  },
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": [
+        "current",
+        "linux"
+      ],
+      "cpu": [
+        "current",
+        "x64",
+        "arm64"
+      ]
+    }
+  }
+}

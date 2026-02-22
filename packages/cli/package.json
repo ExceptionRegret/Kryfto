@@ -1,0 +1,28 @@
+{
+  "name": "@kryfto/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "collector": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "echo 'lint: configure eslint'"
+  },
+  "dependencies": {
+    "@kryfto/shared": "workspace:*",
+    "@kryfto/sdk-ts": "workspace:*",
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.2.4",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}
