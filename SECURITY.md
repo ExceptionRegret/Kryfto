@@ -1,7 +1,7 @@
 # Security Policy
 
 ## Reporting
-Please report vulnerabilities privately to: `security@example.invalid` (replace with your maintainer contact).
+Please report vulnerabilities privately to: `exceptionregret@gmail.com` (replace with your maintainer contact).
 
 Include:
 - affected version/commit
