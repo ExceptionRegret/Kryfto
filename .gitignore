@@ -1,7 +1,14 @@
 node_modules
 **/dist
 .env
+.env.*
+!.env.example
 .pnpm-store
 .DS_Store
 *.log
 coverage
+__pycache__
+*.pyc
+data/
+*.tsbuildinfo
+

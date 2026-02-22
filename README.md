@@ -1,6 +1,8 @@
 <div align="center">
   
-  <h1>🔌 Kryfto</h1>
+  <img src="assets/logo.png" alt="Kryfto Logo" width="280" />
+
+  <h1>Kryfto</h1>
   <p><strong>The Production-Grade Browser Data Collection Runtime</strong></p>
   
   [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template)
@@ -27,7 +29,10 @@ Kryfto is a comprehensive framework for automated data extraction, web crawling,
 Get Kryfto running locally in seconds using Docker Compose.
 
 ```bash
-# Clone and setup environment
+# Option 1: Auto-generate a secure .env with random tokens & passwords
+node scripts/generate-env.mjs -o .env
+
+# Option 2: Or copy the example and fill in values manually
 cp .env.example .env
 
 # Spin up the entire infrastructure (API, Worker, Postgres, Redis, Minio S3)
