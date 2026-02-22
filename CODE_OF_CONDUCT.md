@@ -22,7 +22,7 @@ Project maintainers are responsible for clarifying and enforcing our standards.
 This Code of Conduct applies within project spaces and public spaces when an individual is representing the project.
 
 ## Reporting and Enforcement
-Report incidents to: `conduct@example.invalid` (replace with maintainer contact).
+Report incidents to: `exceptionregret@gmail.com`
 
 Maintainers may remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned with this Code of Conduct.
 
