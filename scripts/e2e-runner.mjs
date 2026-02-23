@@ -53,6 +53,13 @@ if (!finalJob) {
 }
 
 if (finalJob.state !== 'succeeded') {
+  console.error("Job failed!", JSON.stringify(finalJob, null, 2));
+
+  try {
+    const logs = await request(`/v1/jobs/${jobId}/logs`);
+    console.error("Logs:", logs);
+  } catch (e) { }
+
   throw new Error(`Job failed with state=${finalJob.state}`);
 }
 
