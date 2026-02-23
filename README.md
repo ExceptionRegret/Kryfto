@@ -17,10 +17,11 @@
 
 Kryfto is a comprehensive framework for automated data extraction, web crawling, and browser session execution.
 
-* **🤖 AI Agent Ready**: Ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server. Instantly give Claude, Cursor, or Codex the ability to search, browse, and extract data from the live web.
+* **🤖 AI Agent Ready**: Ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server exposing **36 tools**. Instantly give Claude, Cursor, or Codex the ability to search, browse, extract, fact-check, monitor changes, and run benchmarks on the live web.
 * **🕵️‍♂️ Built-in Stealth Mode**: Auto-rotates User-Agents, randomizes viewports, clears canvas fingerprints, and patches `navigator.webdriver` to bypass aggressive bot protections. Full proxy-rotation support included out-of-the-box.
 * **⚙️ Workflow Engine Native**: Fully documented OpenAPI spec makes it trivial to drop into `n8n`, Zapier, Make, or custom Python/TypeScript pipelines.
 * **☁️ Enterprise Infrastructure**: Backed by **Postgres** for persistence, **Redis + BullMQ** for reliable concurrent job queuing, and **MinIO/S3** for long-term artifact storage.
+* **📊 SLO Dashboard & Eval Suite**: Built-in reliability monitoring with per-tool success rates, latency percentiles (p50/p95/p99), deterministic request replay, and a 10-query benchmark suite for nightly regression testing.
 
 ---
 
@@ -78,7 +79,7 @@ Kryfto isn't just an API—it's designed to act as the web-browsing "motor corte
 ### 1. 🤖 Claude Code, Cursor, & Codex (MCP)
 You can directly attach Kryfto to your AI assistant using the bundled **Model Context Protocol (MCP)** server.
 
-**Local configuration (if Kryfto is on your machine):**
+**Claude Code / Cursor** — Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
@@ -94,6 +95,17 @@ You can directly attach Kryfto to your AI assistant using the bundled **Model Co
     }
   }
 }
+```
+
+**OpenAI Codex** — Add to `.codex/config.toml` (per-project) or `~/.codex/config.toml` (global):
+```toml
+[mcp_servers.kryfto]
+command = "node"
+args = ["/absolute/path/to/kryfto/packages/mcp-server/dist/index.js"]
+
+[mcp_servers.kryfto.env]
+API_BASE_URL = "http://localhost:8080"
+API_TOKEN = "<your-token>"
 ```
 
 **Remote VPS configuration (`claude_desktop_config.json` / Cursor MCP Menu):**
@@ -227,6 +239,34 @@ Most modern AI and web-scraping architectures rely on expensive third-party APIs
 - Step 2: Loop through the search results and trigger Kryfto `browse` extraction jobs on each result's URL, targeting `mailto:` hrefs or contact page DOM nodes.
 - Step 3: Automatically POST the collected emails directly into HubSpot or Salesforce.
 
+### Use Case 4: Evidence-Based Technical Research
+**The Problem:** Your team makes decisions based on blog posts and Stack Overflow answers with no source verification. You need traceable, trustworthy evidence.
+**The Kryfto Solution:**
+- Use `answer_with_evidence` to ask a question like "Does React 19 support server components?" — it searches, reads official pages, extracts paragraph-level evidence spans, and ranks them by domain trust score.
+- Use `conflict_detector` to check if multiple sources contradict each other on a topic.
+- Use `confidence_calibration` to score each claim based on source count, official source presence, recency, and domain trust.
+
+### Use Case 5: Framework Upgrade Risk Assessment
+**The Problem:** You need to upgrade Next.js from v13 to v14 but don't know what will break.
+**The Kryfto Solution:**
+- Call `upgrade_impact` with `framework: "nextjs", fromVersion: "13", toVersion: "14"` — it fetches migration guides, scans for breaking/deprecated/removed keywords, and rates the risk as low/medium/high.
+- Combine with `github_releases` and `github_diff` to see every commit between tags.
+- Use `query_planner` to preview the entire search→read→extract chain before executing.
+
+### Use Case 6: Continuous Documentation Monitoring
+**The Problem:** A critical API's docs change without notice, breaking your integration.
+**The Kryfto Solution:**
+- `watch_and_act` registers the URL with an optional Slack/Discord webhook.
+- Periodically call `check_watch` — if the page changed, it auto-fires a POST to your webhook with the diff.
+- Use `semantic_diff` with context like "authentication" to filter only changes relevant to you.
+
+### Use Case 7: SLO Monitoring & Production Reliability
+**The Problem:** You need to know if your AI agent's browsing tool is degrading before users notice.
+**The Kryfto Solution:**
+- `slo_dashboard` shows real-time per-tool success rate, p50/p95/p99 latency, cache hit rate, and freshness.
+- `run_eval_suite` runs 10 real-world queries nightly, checking that official sources appear in results — measures precision% and average latency.
+- `replay_request` retrieves the exact input/output of any previous call by `requestId` for debugging.
+
 ---
 
 ## 🥷 Anti-Bot & Proxy Configuration
@@ -281,3 +321,60 @@ Every contribution helps keep the lights on and the browsers headless. 🙏
 ### License
 Apache-2.0 (`LICENSE`)
 
+---
+
+## 📋 Changelog
+
+### v3.0.0 — Advanced Intelligence Engine (Latest)
+*36 MCP tools · SLO dashboard · Deterministic replay · Eval suite*
+
+**New Tools:**
+| Tool | Category | Description |
+|---|---|---|
+| `research` | Pipeline | Unified search→read→extract pipeline in one call |
+| `answer_with_evidence` | Research | Search + read + extract evidence spans with trust scores |
+| `conflict_detector` | Research | Detect contradictions across sources |
+| `truth_maintenance` | Reliability | Auto-expire stale cached facts |
+| `upgrade_impact` | Developer Intel | Framework migration risk analysis |
+| `query_planner` | Workflow | Preview search/read/extract plan with cost estimates |
+| `confidence_calibration` | Research | Per-claim calibrated confidence scoring |
+| `source_trust` | Trust | Domain trust scoring (github=0.9, arxiv=0.95, .gov=0.9) |
+| `set_source_trust` | Trust | Override domain trust for session |
+| `watch_and_act` | Monitoring | Register URL + webhook for change alerts |
+| `check_watch` | Monitoring | Check watched URL, fires webhook if changed |
+| `semantic_diff` | Monitoring | Context-filtered meaningful diffs |
+| `evaluation_harness` | Testing | Internal benchmark (5 tests) |
+| `set_memory_profile` | Preferences | Per-project source/stack/format memory |
+| `get_memory_profile` | Preferences | Read project preferences |
+| `slo_dashboard` | Observability | Per-tool success rate, p50/p95/p99 latency |
+| `replay_request` | Debugging | Retrieve exact previous request by ID |
+| `list_replays` | Debugging | Browse replayable request history |
+| `run_eval_suite` | Testing | 10 real-world query benchmark suite |
+
+**Infrastructure:**
+- Every tool call auto-records SLO metrics (success, latency, cache)
+- Every response stored for deterministic replay (last 1,000)
+- Server version bumped to 3.0.0
+
+### v2.0.0 — MCP Server V2 Rewrite
+*17 MCP tools · 30 features · Federated search · GitHub tools*
+
+- Federated multi-engine search with auto-fallback (DuckDuckGo, Brave, Bing, Yahoo, Google)
+- `read_url` with HTML→Markdown, publish-date extraction, section detection
+- `read_urls` batch processing (up to 10 concurrent)
+- Citation mode (`cite`), change detection (`detect_changes`)
+- GitHub tools: `github_releases`, `github_diff`, `github_issues`
+- Developer intelligence (`dev_intel`)
+- URL monitors (`add_monitor`, `list_monitors`)
+- In-memory cache with TTL, retry with exponential backoff
+- Domain priority boosting, official-only filtering
+- Scoped API tokens, domain blocklist/allowlist
+- Rich `_meta` in every response (requestId, latencyMs, cached, tool)
+
+### v1.0.0 — Initial Release
+*7 MCP tools · Core infrastructure*
+
+- `browse`, `crawl`, `extract`, `search` tools
+- `get_job`, `list_artifacts`, `fetch_artifact`
+- Stealth mode with User-Agent rotation
+- Docker Compose infrastructure (API, Worker, Postgres, Redis, MinIO)

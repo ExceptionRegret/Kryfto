@@ -131,6 +131,7 @@ export function buildGoogleHtmlSearchUrl(params: { query: string; safeSearch: Sa
   url.searchParams.set('hl', localeParts.language);
   url.searchParams.set('gl', localeParts.region);
   url.searchParams.set('safe', safeSearchToGoogle(params.safeSearch));
+  url.searchParams.set('gbv', '1');
   return url.toString();
 }
 
