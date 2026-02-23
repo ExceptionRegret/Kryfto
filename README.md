@@ -53,6 +53,24 @@ curl -X POST http://localhost:8080/v1/jobs \
   -d '{"url":"https://example.com"}'
 ```
 
+### Reading Extracted Data
+After the job succeeds, retrieve the extracted Markdown or HTML artifact:
+```bash
+curl -H "Authorization: Bearer $KRYFTO_API_TOKEN" \
+  http://localhost:8080/v1/jobs/<jobId>/artifacts
+```
+
+### Running a Federated Search
+Find up-to-date information across DuckDuckGo, Brave, and Google natively:
+```bash
+curl -X POST http://localhost:8080/v1/search \
+  -H "Authorization: Bearer $KRYFTO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"playwright testing", "limit":5, "officialOnly":true}'
+```
+
+> **Note:** For a full breakdown of the REST API, parameter schemas, and advanced options, please refer to the [**API Reference Guide**](docs/api-reference.md).
+
 ---
 
 ## 📚 Documentation Index
@@ -69,6 +87,7 @@ We maintain exhaustive documentation for every component of the Kryfto stack.
 | 🏗️ [**Architecture**](docs/architecture.md) | A deep-dive into the BullMQ, Redis, Node, and MinIO scaling infrastructure map. |
 | 🥘 [**Extraction Recipes**](docs/recipes.md) | Pre-written JSON extraction selectors for popular websites built into the runtime. |
 | 🔌 [**OpenAPI Spec**](docs/openapi.yaml) | The raw `yaml` schema defining the fully-typed REST API. |
+| ⚙️ [**API Reference**](docs/api-reference.md) | Structured usage guide for Jobs, Artifacts, and Search endpoints. |
 
 ---
 
@@ -325,7 +344,14 @@ Apache-2.0 (`LICENSE`)
 
 ## 📋 Changelog
 
-### v3.0.0 — Advanced Intelligence Engine (Latest)
+### v3.0.1 — Search & Reliability Hardening (Latest)
+*Google anti-bot bypass · Semantic version sorting · Bugfixes*
+
+- **Google Crawler Bypass:** Introduced `gbv=1` and Chrome User-Agent spoofing to cleanly evade Google's JS challenge when falling back to scraping.
+- **Semantic Recency Ranking:** Added robust `-X-Y-Z` version parsing to the federated search sorter. Minor version documentation (e.g. `15.5`) now correctly outranks major release pages (`15.0`).
+- **Internal Error Fix:** Resolved a 500 `INTERNAL_ERROR` Postgres crash in the `read_url` tool by unifying the `jobId` artifact fetching fallback logic.
+
+### v3.0.0 — Advanced Intelligence Engine
 *36 MCP tools · SLO dashboard · Deterministic replay · Eval suite*
 
 **New Tools:**
