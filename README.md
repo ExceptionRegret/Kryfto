@@ -98,6 +98,16 @@ Kryfto isn't just an API—it's designed to act as the web-browsing "motor corte
 ### 1. 🤖 Claude Code, Cursor, & Codex (MCP)
 You can directly attach Kryfto to your AI assistant using the bundled **Model Context Protocol (MCP)** server.
 
+#### 🪄 Auto-Generate Configuration
+The easiest way to get your IDE connected is to run the interactive setup wizard. It will auto-detect your API token and absolute path:
+```bash
+node scripts/setup-mcp.mjs
+```
+*Select your client (Claude, Cursor, Codex, RooCode) and copy the generated JSON/TOML into your config file.*
+
+---
+
+#### Manual Configuration
 **Claude Code / Cursor** — Add to `claude_desktop_config.json`:
 ```json
 {
