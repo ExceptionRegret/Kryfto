@@ -1,11 +1,15 @@
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-export type ArtifactStorageBackend = 's3' | 'local';
+export type ArtifactStorageBackend = "s3" | "local";
 
 export type ArtifactStorageConfig = {
   backend: ArtifactStorageBackend;
@@ -26,17 +30,22 @@ export type StoredArtifact = {
 };
 
 export function sha256Hex(input: Buffer): string {
-  return createHash('sha256').update(input).digest('hex');
+  return createHash("sha256").update(input).digest("hex");
 }
 
 export function defaultArtifactConfigFromEnv(): ArtifactStorageConfig {
-  const backend = (process.env.KRYFTO_ARTIFACT_BACKEND ?? 's3') as ArtifactStorageBackend;
+  const backend = (process.env.KRYFTO_ARTIFACT_BACKEND ??
+    "s3") as ArtifactStorageBackend;
   const config: ArtifactStorageConfig = {
     backend,
-    bucket: process.env.S3_BUCKET ?? 'collector-artifacts',
-    region: process.env.S3_REGION ?? 'us-east-1',
-    forcePathStyle: process.env.S3_FORCE_PATH_STYLE ? process.env.S3_FORCE_PATH_STYLE === 'true' : true,
-    localDir: process.env.KRYFTO_LOCAL_ARTIFACT_DIR ?? path.join(process.cwd(), 'data', 'artifacts'),
+    bucket: process.env.S3_BUCKET ?? "collector-artifacts",
+    region: process.env.S3_REGION ?? "us-east-1",
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE
+      ? process.env.S3_FORCE_PATH_STYLE === "true"
+      : true,
+    localDir:
+      process.env.KRYFTO_LOCAL_ARTIFACT_DIR ??
+      path.join(process.cwd(), "data", "artifacts"),
   };
 
   if (process.env.S3_ENDPOINT) {
@@ -57,7 +66,7 @@ export class ArtifactStorage {
 
   constructor(config: ArtifactStorageConfig) {
     this.config = config;
-    if (config.backend === 's3') {
+    if (config.backend === "s3") {
       const s3Config: ConstructorParameters<typeof S3Client>[0] = {
         region: config.region,
       };
@@ -81,11 +90,15 @@ export class ArtifactStorage {
     }
   }
 
-  async putBuffer(storageKey: string, payload: Buffer, contentType: string): Promise<StoredArtifact> {
+  async putBuffer(
+    storageKey: string,
+    payload: Buffer,
+    contentType: string
+  ): Promise<StoredArtifact> {
     const digest = sha256Hex(payload);
 
-    if (this.config.backend === 's3') {
-      if (!this.s3) throw new Error('S3 client not configured');
+    if (this.config.backend === "s3") {
+      if (!this.s3) throw new Error("S3 client not configured");
       await this.s3.send(
         new PutObjectCommand({
           Bucket: this.config.bucket,
@@ -109,8 +122,8 @@ export class ArtifactStorage {
   }
 
   async getBuffer(storageKey: string): Promise<Buffer> {
-    if (this.config.backend === 's3') {
-      if (!this.s3) throw new Error('S3 client not configured');
+    if (this.config.backend === "s3") {
+      if (!this.s3) throw new Error("S3 client not configured");
       const response = await this.s3.send(
         new GetObjectCommand({
           Bucket: this.config.bucket,
@@ -119,13 +132,18 @@ export class ArtifactStorage {
       );
       const chunks: Buffer[] = [];
       const stream = response.Body;
-      if (!stream || typeof (stream as NodeJS.ReadableStream).on !== 'function') {
-        throw new Error('S3 stream unavailable');
+      if (
+        !stream ||
+        typeof (stream as NodeJS.ReadableStream).on !== "function"
+      ) {
+        throw new Error("S3 stream unavailable");
       }
       await new Promise<void>((resolve, reject) => {
-        (stream as NodeJS.ReadableStream).on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        (stream as NodeJS.ReadableStream).on('error', reject);
-        (stream as NodeJS.ReadableStream).on('end', () => resolve());
+        (stream as NodeJS.ReadableStream).on("data", (chunk) =>
+          chunks.push(Buffer.from(chunk))
+        );
+        (stream as NodeJS.ReadableStream).on("error", reject);
+        (stream as NodeJS.ReadableStream).on("end", () => resolve());
       });
       return Buffer.concat(chunks);
     }
@@ -134,8 +152,11 @@ export class ArtifactStorage {
     return readFile(fullPath);
   }
 
-  async createSignedReadUrl(storageKey: string, ttlSeconds = 300): Promise<string | null> {
-    if (this.config.backend !== 's3' || !this.s3) {
+  async createSignedReadUrl(
+    storageKey: string,
+    ttlSeconds = 300
+  ): Promise<string | null> {
+    if (this.config.backend !== "s3" || !this.s3) {
       return null;
     }
 
@@ -149,15 +170,19 @@ export class ArtifactStorage {
 }
 
 export function artifactFileExt(contentType: string): string {
-  if (contentType.includes('json')) return 'json';
-  if (contentType.includes('html')) return 'html';
-  if (contentType.includes('png')) return 'png';
-  if (contentType.includes('har')) return 'har';
-  if (contentType.includes('text')) return 'txt';
-  return 'bin';
+  if (contentType.includes("json")) return "json";
+  if (contentType.includes("html")) return "html";
+  if (contentType.includes("png")) return "png";
+  if (contentType.includes("har")) return "har";
+  if (contentType.includes("text")) return "txt";
+  return "bin";
 }
 
-export function makeArtifactStorageKey(projectId: string, sha: string, contentType: string): string {
+export function makeArtifactStorageKey(
+  projectId: string,
+  sha: string,
+  contentType: string
+): string {
   const ext = artifactFileExt(contentType);
   return `${projectId}/${sha.slice(0, 2)}/${sha}.${ext}`;
 }
@@ -165,6 +190,6 @@ export function makeArtifactStorageKey(projectId: string, sha: string, contentTy
 export function resolveRepoPath(...parts: string[]): string {
   const currentFile = fileURLToPath(import.meta.url);
   const sharedSrc = path.dirname(currentFile);
-  const repoRoot = path.resolve(sharedSrc, '..', '..', '..');
+  const repoRoot = path.resolve(sharedSrc, "..", "..", "..");
   return path.join(repoRoot, ...parts);
 }

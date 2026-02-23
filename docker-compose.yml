@@ -50,7 +50,11 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collector} -d ${POSTGRES_DB:-collector}" ]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-collector} -d ${POSTGRES_DB:-collector}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -63,7 +67,7 @@ services:
     volumes:
       - redisdata:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -96,7 +100,7 @@ services:
       "
 
   api-lite:
-    profiles: [ "lite" ]
+    profiles: ["lite"]
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -119,7 +123,7 @@ services:
       - litestorage:/data
 
   worker-lite:
-    profiles: [ "lite" ]
+    profiles: ["lite"]
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
@@ -140,20 +144,24 @@ services:
       - litestorage:/data
 
   postgres-lite:
-    profiles: [ "lite" ]
+    profiles: ["lite"]
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-collector}
       POSTGRES_USER: ${POSTGRES_USER:-collector}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-collector_password_change_me}
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collector} -d ${POSTGRES_DB:-collector}" ]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-collector} -d ${POSTGRES_DB:-collector}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 20
 
   prometheus:
-    profiles: [ "observability" ]
+    profiles: ["observability"]
     image: prom/prometheus:v2.55.1
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -163,7 +171,7 @@ services:
       - api
 
   grafana:
-    profiles: [ "observability" ]
+    profiles: ["observability"]
     image: grafana/grafana:11.3.1
     ports:
       - "3000:3000"
@@ -174,7 +182,7 @@ services:
       - grafanadata:/var/lib/grafana
 
   worker-ui:
-    profiles: [ "ui" ]
+    profiles: ["ui"]
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
@@ -193,7 +201,7 @@ services:
         condition: service_completed_successfully
 
   browser-ui:
-    profiles: [ "ui" ]
+    profiles: ["ui"]
     image: accetto/ubuntu-vnc-xfce-chromium-g3
     ports:
       - "6901:6901"
@@ -201,7 +209,7 @@ services:
       VNC_PW: collector
 
   py-extractor:
-    profiles: [ "py-extractor" ]
+    profiles: ["py-extractor"]
     build:
       context: .
       dockerfile: docker/py-extractor.Dockerfile

@@ -37,19 +37,19 @@ components:
       enum: [chromium, firefox, webkit]
     Step:
       oneOf:
-        - $ref: '#/components/schemas/StepGoto'
-        - $ref: '#/components/schemas/StepSetHeaders'
-        - $ref: '#/components/schemas/StepSetCookies'
-        - $ref: '#/components/schemas/StepExportCookies'
-        - $ref: '#/components/schemas/StepWaitForSelector'
-        - $ref: '#/components/schemas/StepClick'
-        - $ref: '#/components/schemas/StepType'
-        - $ref: '#/components/schemas/StepScroll'
-        - $ref: '#/components/schemas/StepWait'
-        - $ref: '#/components/schemas/StepWaitForNetworkIdle'
-        - $ref: '#/components/schemas/StepPaginate'
-        - $ref: '#/components/schemas/StepScreenshot'
-        - $ref: '#/components/schemas/StepExtract'
+        - $ref: "#/components/schemas/StepGoto"
+        - $ref: "#/components/schemas/StepSetHeaders"
+        - $ref: "#/components/schemas/StepSetCookies"
+        - $ref: "#/components/schemas/StepExportCookies"
+        - $ref: "#/components/schemas/StepWaitForSelector"
+        - $ref: "#/components/schemas/StepClick"
+        - $ref: "#/components/schemas/StepType"
+        - $ref: "#/components/schemas/StepScroll"
+        - $ref: "#/components/schemas/StepWait"
+        - $ref: "#/components/schemas/StepWaitForNetworkIdle"
+        - $ref: "#/components/schemas/StepPaginate"
+        - $ref: "#/components/schemas/StepScreenshot"
+        - $ref: "#/components/schemas/StepExtract"
     StepGoto:
       type: object
       required: [type, args]
@@ -192,7 +192,7 @@ components:
       properties:
         type: { type: string, const: extract }
         args:
-          $ref: '#/components/schemas/ExtractionConfig'
+          $ref: "#/components/schemas/ExtractionConfig"
     ExtractionConfig:
       type: object
       required: [mode]
@@ -207,7 +207,7 @@ components:
       type: object
       properties:
         requiresBrowser: { type: boolean }
-        browserEngine: { $ref: '#/components/schemas/BrowserEngine' }
+        browserEngine: { $ref: "#/components/schemas/BrowserEngine" }
         respectRobotsTxt: { type: boolean, default: true }
         timeoutMs: { type: integer, minimum: 1000 }
         interactiveLogin: { type: boolean, default: false }
@@ -217,19 +217,19 @@ components:
       properties:
         url: { type: string, format: uri }
         recipeId: { type: string }
-        options: { $ref: '#/components/schemas/JobOptions' }
+        options: { $ref: "#/components/schemas/JobOptions" }
         steps:
           type: array
-          items: { $ref: '#/components/schemas/Step' }
+          items: { $ref: "#/components/schemas/Step" }
         extract:
-          $ref: '#/components/schemas/ExtractionConfig'
+          $ref: "#/components/schemas/ExtractionConfig"
     Job:
       type: object
       required: [id, projectId, state, createdAt, updatedAt]
       properties:
         id: { type: string }
         projectId: { type: string }
-        state: { $ref: '#/components/schemas/JobState' }
+        state: { $ref: "#/components/schemas/JobState" }
         url: { type: string }
         requestId: { type: string }
         attempts: { type: integer }
@@ -271,8 +271,14 @@ components:
       properties:
         query: { type: string, minLength: 1, maxLength: 512 }
         limit: { type: integer, minimum: 1, maximum: 20, default: 10 }
-        engine: { type: string, enum: [duckduckgo, bing, yahoo, google, brave], default: duckduckgo }
-        safeSearch: { type: string, enum: [strict, moderate, off], default: moderate }
+        engine:
+          {
+            type: string,
+            enum: [duckduckgo, bing, yahoo, google, brave],
+            default: duckduckgo,
+          }
+        safeSearch:
+          { type: string, enum: [strict, moderate, off], default: moderate }
         locale: { type: string, default: us-en }
     SearchResult:
       type: object
@@ -300,16 +306,20 @@ components:
       required: [seed]
       properties:
         seed: { type: string, format: uri }
-        rules: { $ref: '#/components/schemas/CrawlRules' }
+        rules: { $ref: "#/components/schemas/CrawlRules" }
         recipeId: { type: string }
-        extract: { $ref: '#/components/schemas/ExtractionConfig' }
+        extract: { $ref: "#/components/schemas/ExtractionConfig" }
     CrawlStatus:
       type: object
       required: [id, state, seed, createdAt]
       properties:
         id: { type: string }
         projectId: { type: string }
-        state: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        state:
+          {
+            type: string,
+            enum: [queued, running, succeeded, failed, cancelled],
+          }
         seed: { type: string }
         stats: { type: object }
         createdAt: { type: string, format: date-time }
@@ -332,9 +342,9 @@ components:
         requiresBrowser: { type: boolean }
         steps:
           type: array
-          items: { $ref: '#/components/schemas/Step' }
+          items: { $ref: "#/components/schemas/Step" }
         extraction:
-          $ref: '#/components/schemas/ExtractionConfig'
+          $ref: "#/components/schemas/ExtractionConfig"
         throttling:
           type: object
           properties:
@@ -355,9 +365,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/JobCreateRequest'
+              $ref: "#/components/schemas/JobCreateRequest"
       responses:
-        '202':
+        "202":
           description: queued
           content:
             application/json:
@@ -365,14 +375,14 @@ paths:
                 type: object
                 properties:
                   jobId: { type: string }
-                  state: { $ref: '#/components/schemas/JobState' }
+                  state: { $ref: "#/components/schemas/JobState" }
                   requestId: { type: string }
                   idempotencyKey: { type: string }
-        '400':
+        "400":
           description: validation error
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
   /v1/jobs/{jobId}:
     get:
       summary: Get job status + result summary
@@ -382,11 +392,11 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200':
+        "200":
           description: job details
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Job' }
+              schema: { $ref: "#/components/schemas/Job" }
   /v1/jobs/{jobId}/logs:
     get:
       summary: Stream job logs
@@ -396,7 +406,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200':
+        "200":
           description: SSE stream
           content:
             text/event-stream:
@@ -411,7 +421,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '202':
+        "202":
           description: cancellation requested
   /v1/jobs/{jobId}/artifacts:
     get:
@@ -422,7 +432,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200':
+        "200":
           description: artifacts
           content:
             application/json:
@@ -431,7 +441,7 @@ paths:
                 properties:
                   items:
                     type: array
-                    items: { $ref: '#/components/schemas/Artifact' }
+                    items: { $ref: "#/components/schemas/Artifact" }
   /v1/artifacts/{artifactId}:
     get:
       summary: Download artifact (authorized)
@@ -444,7 +454,7 @@ paths:
           name: downloadToken
           schema: { type: string }
       responses:
-        '200':
+        "200":
           description: binary artifact bytes
           content:
             application/octet-stream:
@@ -458,9 +468,9 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ExtractRequest' }
+            schema: { $ref: "#/components/schemas/ExtractRequest" }
       responses:
-        '200':
+        "200":
           description: extraction output
           content:
             application/json:
@@ -476,9 +486,9 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SearchRequest' }
+            schema: { $ref: "#/components/schemas/SearchRequest" }
       responses:
-        '200':
+        "200":
           description: search results
           content:
             application/json:
@@ -493,7 +503,7 @@ paths:
                   requestId: { type: string }
                   results:
                     type: array
-                    items: { $ref: '#/components/schemas/SearchResult' }
+                    items: { $ref: "#/components/schemas/SearchResult" }
   /v1/crawl:
     post:
       summary: Start crawl
@@ -501,9 +511,9 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CrawlRequest' }
+            schema: { $ref: "#/components/schemas/CrawlRequest" }
       responses:
-        '202':
+        "202":
           description: crawl queued
           content:
             application/json:
@@ -522,11 +532,11 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200':
+        "200":
           description: crawl status
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CrawlStatus' }
+              schema: { $ref: "#/components/schemas/CrawlStatus" }
   /v1/recipes/validate:
     post:
       summary: Validate recipe file payload
@@ -536,13 +546,13 @@ paths:
           application/json:
             schema: {}
       responses:
-        '200':
+        "200":
           description: validation result
   /v1/recipes:
     get:
       summary: List recipes
       responses:
-        '200':
+        "200":
           description: list
     post:
       summary: Upload/register recipe (admin)
@@ -550,25 +560,25 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/Recipe' }
+            schema: { $ref: "#/components/schemas/Recipe" }
       responses:
-        '201':
+        "201":
           description: created
   /v1/healthz:
     get:
       security: []
       summary: Liveness
       responses:
-        '200': { description: ok }
+        "200": { description: ok }
   /v1/readyz:
     get:
       security: []
       summary: Readiness
       responses:
-        '200': { description: ready }
+        "200": { description: ready }
   /v1/metrics:
     get:
       security: []
       summary: Prometheus metrics
       responses:
-        '200': { description: metrics }
+        "200": { description: metrics }

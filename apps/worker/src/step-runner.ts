@@ -1,4 +1,4 @@
-import { sanitizeStepForLogs, type Step } from '@kryfto/shared';
+import { sanitizeStepForLogs, type Step } from "@kryfto/shared";
 
 export function buildStepPlan(url: string, steps?: Step[]): Step[] {
   if (steps && steps.length > 0) {
@@ -6,8 +6,8 @@ export function buildStepPlan(url: string, steps?: Step[]): Step[] {
   }
 
   return [
-    { type: 'goto', args: { url } },
-    { type: 'waitForNetworkIdle', args: { timeoutMs: 30_000 } },
+    { type: "goto", args: { url } },
+    { type: "waitForNetworkIdle", args: { timeoutMs: 30_000 } },
   ];
 }
 

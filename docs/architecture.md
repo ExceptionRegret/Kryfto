@@ -1,9 +1,11 @@
 # Architecture
 
 ## Overview
+
 The runtime is a Dockerized control-plane + worker system for deterministic data collection and extraction.
 
 ## Services
+
 - `apps/api`: Fastify API with OpenAPI, auth/RBAC, idempotency, rate limiting, SSRF checks, audit logging, metrics, and tracing hooks.
 - `apps/worker`: BullMQ processors for browser/fetch collection and crawl orchestration.
 - `redis`: queue transport and worker concurrency semaphores.
@@ -13,6 +15,7 @@ The runtime is a Dockerized control-plane + worker system for deterministic data
 - `packages/cli`, `packages/sdk-ts`, `packages/sdk-py`: client interfaces.
 
 ## Data Flow
+
 1. Client calls `POST /v1/jobs` (or MCP `browse`) with optional idempotency key.
 2. API validates with zod, applies recipe defaults, enqueues BullMQ job, and writes audit + job records.
 3. Worker executes fetch path or Playwright browser path, captures artifacts (HTML/screenshot/HAR/logs/timings), performs extraction, and updates job state.
@@ -20,6 +23,7 @@ The runtime is a Dockerized control-plane + worker system for deterministic data
 5. API serves status, logs (SSE), artifact listing/download, extraction-on-demand, and crawl orchestration.
 
 ## Persistence Model
+
 - `projects`, `api_tokens`
 - `jobs`, `idempotency_keys`, `job_logs`
 - `artifact_blobs`, `artifacts`, `artifact_download_tokens`
@@ -28,6 +32,7 @@ The runtime is a Dockerized control-plane + worker system for deterministic data
 - `audit_logs`
 
 ## Observability
+
 - `GET /v1/metrics` Prometheus metrics
 - `GET /v1/healthz` liveness
 - `GET /v1/readyz` readiness (db + redis)
@@ -35,6 +40,7 @@ The runtime is a Dockerized control-plane + worker system for deterministic data
 - OpenTelemetry spans scaffolded in API and worker execution paths
 
 ## Profiles
+
 - default: api + worker + redis + postgres + minio
 - `lite`: local artifact backend + reduced stack (small deployment profile)
 - `observability`: prometheus + grafana

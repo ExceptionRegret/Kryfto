@@ -1,68 +1,87 @@
 #!/usr/bin/env node
 
-import { randomBytes } from 'node:crypto';
-import { chmod, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { randomBytes } from "node:crypto";
+import { chmod, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SECTION_LAYOUT = [
   {
-    title: 'API',
+    title: "API",
     keys: [
-      'KRYFTO_PORT',
-      'KRYFTO_LOG_LEVEL',
-      'KRYFTO_API_TOKEN',
-      'KRYFTO_BOOTSTRAP_ADMIN_TOKEN',
-      'KRYFTO_PROJECT_ID',
-      'KRYFTO_JOB_MAX_ATTEMPTS',
-      'KRYFTO_RATE_LIMIT_RPM',
+      "KRYFTO_PORT",
+      "KRYFTO_LOG_LEVEL",
+      "KRYFTO_API_TOKEN",
+      "KRYFTO_BOOTSTRAP_ADMIN_TOKEN",
+      "KRYFTO_PROJECT_ID",
+      "KRYFTO_JOB_MAX_ATTEMPTS",
+      "KRYFTO_RATE_LIMIT_RPM",
     ],
   },
   {
-    title: 'Security',
-    keys: ['KRYFTO_SSRF_BLOCK_PRIVATE_RANGES', 'KRYFTO_ALLOWED_HOSTS'],
+    title: "Security",
+    keys: ["KRYFTO_SSRF_BLOCK_PRIVATE_RANGES", "KRYFTO_ALLOWED_HOSTS"],
   },
   {
-    title: 'Postgres',
-    keys: ['POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_HOST', 'POSTGRES_PORT', 'PG_POOL_MAX'],
-  },
-  {
-    title: 'Redis',
-    keys: ['REDIS_HOST', 'REDIS_PORT'],
-  },
-  {
-    title: 'Artifacts',
+    title: "Postgres",
     keys: [
-      'KRYFTO_ARTIFACT_BACKEND',
-      'KRYFTO_LOCAL_ARTIFACT_DIR',
-      'S3_ENDPOINT',
-      'S3_REGION',
-      'S3_ACCESS_KEY',
-      'S3_SECRET_KEY',
-      'S3_BUCKET',
-      'S3_FORCE_PATH_STYLE',
+      "POSTGRES_DB",
+      "POSTGRES_USER",
+      "POSTGRES_PASSWORD",
+      "POSTGRES_HOST",
+      "POSTGRES_PORT",
+      "PG_POOL_MAX",
     ],
   },
   {
-    title: 'Optional Paths',
-    keys: ['KRYFTO_RECIPES_DIR', 'KRYFTO_MIGRATIONS_DIR'],
+    title: "Redis",
+    keys: ["REDIS_HOST", "REDIS_PORT"],
   },
   {
-    title: 'CLI/MCP Client Defaults',
-    keys: ['API_BASE_URL', 'API_TOKEN'],
+    title: "Artifacts",
+    keys: [
+      "KRYFTO_ARTIFACT_BACKEND",
+      "KRYFTO_LOCAL_ARTIFACT_DIR",
+      "S3_ENDPOINT",
+      "S3_REGION",
+      "S3_ACCESS_KEY",
+      "S3_SECRET_KEY",
+      "S3_BUCKET",
+      "S3_FORCE_PATH_STYLE",
+    ],
+  },
+  {
+    title: "Stealth / Proxy & Network (Optional)",
+    keys: [
+      "KRYFTO_STEALTH_MODE",
+      "KRYFTO_ROTATE_USER_AGENT",
+      "KRYFTO_PROXY_URLS",
+      "KRYFTO_PROXY_COUNTRY",
+      "KRYFTO_PROXY_ROTATION_STRATEGY",
+      "KRYFTO_PROXY_SESSION_AFFINITY",
+    ],
+  },
+  {
+    title: "Optional Paths",
+    keys: ["KRYFTO_RECIPES_DIR", "KRYFTO_MIGRATIONS_DIR"],
+  },
+  {
+    title: "CLI/MCP Client Defaults",
+    keys: ["API_BASE_URL", "API_TOKEN"],
   },
 ];
 
 export const ENV_ORDER = SECTION_LAYOUT.flatMap((section) => section.keys);
 
 function randomToken(byteLength = 32) {
-  return randomBytes(byteLength).toString('base64url');
+  return randomBytes(byteLength).toString("base64url");
 }
 
 function randomAlphaNumeric(length) {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alphabet =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const bytes = randomBytes(length);
-  let output = '';
+  let output = "";
   for (let i = 0; i < length; i += 1) {
     output += alphabet[bytes[i] % alphabet.length];
   }
@@ -70,8 +89,8 @@ function randomAlphaNumeric(length) {
 }
 
 function serializeValue(value) {
-  if (value === '') {
-    return '';
+  if (value === "") {
+    return "";
   }
   if (/[\s#"'`\\]/.test(value)) {
     return JSON.stringify(value);
@@ -80,72 +99,78 @@ function serializeValue(value) {
 }
 
 export function buildEnvMap(options = {}) {
-  const { backend = 'local' } = options;
-  if (!['local', 's3'].includes(backend)) {
+  const { backend = "local" } = options;
+  if (!["local", "s3"].includes(backend)) {
     throw new Error(`Invalid backend: ${backend}`);
   }
 
   const apiToken = `collector_${randomToken(24)}`;
   return {
-    KRYFTO_PORT: '8080',
-    KRYFTO_LOG_LEVEL: 'info',
+    KRYFTO_PORT: "8080",
+    KRYFTO_LOG_LEVEL: "info",
     KRYFTO_API_TOKEN: apiToken,
     KRYFTO_BOOTSTRAP_ADMIN_TOKEN: apiToken,
-    KRYFTO_PROJECT_ID: 'dev',
-    KRYFTO_JOB_MAX_ATTEMPTS: '3',
-    KRYFTO_RATE_LIMIT_RPM: '120',
-    KRYFTO_SSRF_BLOCK_PRIVATE_RANGES: 'true',
-    KRYFTO_ALLOWED_HOSTS: '',
-    POSTGRES_DB: 'collector',
-    POSTGRES_USER: 'collector',
+    KRYFTO_PROJECT_ID: "dev",
+    KRYFTO_JOB_MAX_ATTEMPTS: "3",
+    KRYFTO_RATE_LIMIT_RPM: "120",
+    KRYFTO_SSRF_BLOCK_PRIVATE_RANGES: "true",
+    KRYFTO_ALLOWED_HOSTS: "",
+    POSTGRES_DB: "collector",
+    POSTGRES_USER: "collector",
     POSTGRES_PASSWORD: randomToken(24),
-    POSTGRES_HOST: 'postgres',
-    POSTGRES_PORT: '5432',
-    PG_POOL_MAX: '20',
-    REDIS_HOST: 'redis',
-    REDIS_PORT: '6379',
+    POSTGRES_HOST: "postgres",
+    POSTGRES_PORT: "5432",
+    PG_POOL_MAX: "20",
+    REDIS_HOST: "redis",
+    REDIS_PORT: "6379",
     KRYFTO_ARTIFACT_BACKEND: backend,
-    KRYFTO_LOCAL_ARTIFACT_DIR: './data/artifacts',
-    S3_ENDPOINT: 'http://minio:9000',
-    S3_REGION: 'us-east-1',
+    KRYFTO_LOCAL_ARTIFACT_DIR: "./data/artifacts",
+    S3_ENDPOINT: "http://minio:9000",
+    S3_REGION: "us-east-1",
     S3_ACCESS_KEY: `minio_${randomAlphaNumeric(20)}`,
     S3_SECRET_KEY: randomToken(36),
-    S3_BUCKET: 'collector-artifacts',
-    S3_FORCE_PATH_STYLE: 'true',
-    KRYFTO_RECIPES_DIR: '',
-    KRYFTO_MIGRATIONS_DIR: '',
-    API_BASE_URL: 'http://localhost:8080',
+    S3_BUCKET: "collector-artifacts",
+    S3_FORCE_PATH_STYLE: "true",
+    KRYFTO_STEALTH_MODE: "",
+    KRYFTO_ROTATE_USER_AGENT: "",
+    KRYFTO_PROXY_URLS: "",
+    KRYFTO_PROXY_COUNTRY: "",
+    KRYFTO_PROXY_ROTATION_STRATEGY: "",
+    KRYFTO_PROXY_SESSION_AFFINITY: "",
+    KRYFTO_RECIPES_DIR: "",
+    KRYFTO_MIGRATIONS_DIR: "",
+    API_BASE_URL: "http://localhost:8080",
     API_TOKEN: apiToken,
   };
 }
 
 export function renderEnv(values, generatedAt = new Date()) {
   const lines = [
-    '# DO NOT COMMIT THIS FILE',
+    "# DO NOT COMMIT THIS FILE",
     `# Generated by scripts/generate-env.mjs on ${generatedAt.toISOString()}`,
-    '# NOTE: S3_* values are for S3-compatible storage (MinIO), not AWS-specific usage.',
-    '',
+    "# NOTE: S3_* values are for S3-compatible storage (MinIO), not AWS-specific usage.",
+    "",
   ];
 
   for (const section of SECTION_LAYOUT) {
     lines.push(`# ${section.title}`);
     for (const key of section.keys) {
-      lines.push(`${key}=${serializeValue(values[key] ?? '')}`);
+      lines.push(`${key}=${serializeValue(values[key] ?? "")}`);
     }
-    lines.push('');
+    lines.push("");
   }
 
-  return `${lines.join('\n').trimEnd()}\n`;
+  return `${lines.join("\n").trimEnd()}\n`;
 }
 
 export async function generateEnvFile(options = {}) {
-  const { outputPath = '.env', force = false, backend = 'local' } = options;
+  const { outputPath = ".env", force = false, backend = "local" } = options;
   const values = buildEnvMap({ backend });
   const content = renderEnv(values);
 
   await writeFile(outputPath, content, {
-    encoding: 'utf8',
-    flag: force ? 'w' : 'wx',
+    encoding: "utf8",
+    flag: force ? "w" : "wx",
   });
 
   try {
@@ -159,49 +184,49 @@ export async function generateEnvFile(options = {}) {
 
 function usage() {
   return [
-    'Usage: node scripts/generate-env.mjs [--output <path>] [--backend <local|s3>] [--force]',
-    '',
-    'Options:',
-    '  -o, --output <path>  Output path for generated env file (default: .env)',
-    '  -b, --backend <kind> Artifact backend: local or s3 (default: local)',
-    '  -f, --force          Overwrite existing file',
-    '  -h, --help           Show help',
-  ].join('\n');
+    "Usage: node scripts/generate-env.mjs [--output <path>] [--backend <local|s3>] [--force]",
+    "",
+    "Options:",
+    "  -o, --output <path>  Output path for generated env file (default: .env)",
+    "  -b, --backend <kind> Artifact backend: local or s3 (default: local)",
+    "  -f, --force          Overwrite existing file",
+    "  -h, --help           Show help",
+  ].join("\n");
 }
 
 function parseArgs(argv) {
-  let outputPath = '.env';
-  let backend = 'local';
+  let outputPath = ".env";
+  let backend = "local";
   let force = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--output' || arg === '-o') {
+    if (arg === "--output" || arg === "-o") {
       const value = argv[i + 1];
       if (!value) {
-        throw new Error('Missing value for --output');
+        throw new Error("Missing value for --output");
       }
       outputPath = value;
       i += 1;
       continue;
     }
-    if (arg === '--force' || arg === '-f') {
+    if (arg === "--force" || arg === "-f") {
       force = true;
       continue;
     }
-    if (arg === '--backend' || arg === '-b') {
+    if (arg === "--backend" || arg === "-b") {
       const value = argv[i + 1];
       if (!value) {
-        throw new Error('Missing value for --backend');
+        throw new Error("Missing value for --backend");
       }
-      if (!['local', 's3'].includes(value)) {
-        throw new Error('Invalid --backend value. Use local or s3.');
+      if (!["local", "s3"].includes(value)) {
+        throw new Error("Invalid --backend value. Use local or s3.");
       }
       backend = value;
       i += 1;
       continue;
     }
-    if (arg === '--help' || arg === '-h') {
+    if (arg === "--help" || arg === "-h") {
       return { help: true };
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -230,8 +255,15 @@ if (isMain) {
 
     process.stdout.write(`Generated ${result.outputPath}\n`);
   } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
-      process.stderr.write('Refusing to overwrite existing file. Use --force to replace it.\n');
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "EEXIST"
+    ) {
+      process.stderr.write(
+        "Refusing to overwrite existing file. Use --force to replace it.\n"
+      );
       process.exit(1);
     }
     const message = error instanceof Error ? error.message : String(error);

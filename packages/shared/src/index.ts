@@ -1,12 +1,19 @@
-import { z } from 'zod';
+import { z } from "zod";
 
-export const RoleSchema = z.enum(['admin', 'developer', 'readonly']);
+export const RoleSchema = z.enum(["admin", "developer", "readonly"]);
 export type Role = z.infer<typeof RoleSchema>;
 
-export const JobStateSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'expired']);
+export const JobStateSchema = z.enum([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "expired",
+]);
 export type JobState = z.infer<typeof JobStateSchema>;
 
-export const BrowserEngineSchema = z.enum(['chromium', 'firefox', 'webkit']);
+export const BrowserEngineSchema = z.enum(["chromium", "firefox", "webkit"]);
 export type BrowserEngine = z.infer<typeof BrowserEngineSchema>;
 
 export const CookieSchema = z.object({
@@ -17,38 +24,38 @@ export const CookieSchema = z.object({
   expires: z.number().optional(),
   httpOnly: z.boolean().optional(),
   secure: z.boolean().optional(),
-  sameSite: z.enum(['Strict', 'Lax', 'None']).optional(),
+  sameSite: z.enum(["Strict", "Lax", "None"]).optional(),
 });
 export type CookieInput = z.infer<typeof CookieSchema>;
 
 const GotoStepSchema = z.object({
-  type: z.literal('goto'),
+  type: z.literal("goto"),
   args: z.object({
     url: z.string().url(),
   }),
 });
 
 const SetHeadersStepSchema = z.object({
-  type: z.literal('setHeaders'),
+  type: z.literal("setHeaders"),
   args: z.object({
     headers: z.record(z.string()),
   }),
 });
 
 const SetCookiesStepSchema = z.object({
-  type: z.literal('setCookies'),
+  type: z.literal("setCookies"),
   args: z.object({
     cookies: z.array(CookieSchema).min(1),
   }),
 });
 
 const ExportCookiesStepSchema = z.object({
-  type: z.literal('exportCookies'),
+  type: z.literal("exportCookies"),
   args: z.record(z.unknown()).optional().default({}),
 });
 
 const WaitForSelectorStepSchema = z.object({
-  type: z.literal('waitForSelector'),
+  type: z.literal("waitForSelector"),
   args: z.object({
     selector: z.string().min(1),
     timeoutMs: z.number().int().positive().optional(),
@@ -56,14 +63,14 @@ const WaitForSelectorStepSchema = z.object({
 });
 
 const ClickStepSchema = z.object({
-  type: z.literal('click'),
+  type: z.literal("click"),
   args: z.object({
     selector: z.string().min(1),
   }),
 });
 
 const TypeStepSchema = z.object({
-  type: z.literal('type'),
+  type: z.literal("type"),
   args: z.object({
     selector: z.string().min(1),
     text: z.string(),
@@ -72,29 +79,29 @@ const TypeStepSchema = z.object({
 });
 
 const ScrollStepSchema = z.object({
-  type: z.literal('scroll'),
+  type: z.literal("scroll"),
   args: z.object({
-    direction: z.enum(['up', 'down']),
+    direction: z.enum(["up", "down"]),
     amount: z.number().int().positive(),
   }),
 });
 
 const WaitStepSchema = z.object({
-  type: z.literal('wait'),
+  type: z.literal("wait"),
   args: z.object({
     ms: z.number().int().positive(),
   }),
 });
 
 const WaitForNetworkIdleStepSchema = z.object({
-  type: z.literal('waitForNetworkIdle'),
+  type: z.literal("waitForNetworkIdle"),
   args: z.object({
     timeoutMs: z.number().int().positive().optional(),
   }),
 });
 
 const PaginateStepSchema = z.object({
-  type: z.literal('paginate'),
+  type: z.literal("paginate"),
   args: z.object({
     nextSelector: z.string().min(1),
     maxPages: z.number().int().positive().max(100).default(10),
@@ -103,41 +110,50 @@ const PaginateStepSchema = z.object({
 });
 
 const ScreenshotStepSchema = z.object({
-  type: z.literal('screenshot'),
+  type: z.literal("screenshot"),
   args: z.object({
     name: z.string().min(1),
   }),
 });
 
-export const ExtractionModeSchema = z.enum(['selectors', 'schema', 'plugin']);
+export const ExtractionModeSchema = z.enum(["selectors", "schema", "plugin"]);
 export type ExtractionMode = z.infer<typeof ExtractionModeSchema>;
 
 export const ExtractionConfigSchema = z
   .object({
-    mode: ExtractionModeSchema.default('selectors'),
+    mode: ExtractionModeSchema.default("selectors"),
     selectors: z.record(z.string()).optional(),
     jsonSchema: z.record(z.unknown()).optional(),
     plugin: z.string().optional(),
   })
   .superRefine((value, ctx) => {
-    if (value.mode === 'selectors' && !value.selectors) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'selectors required when mode=selectors' });
+    if (value.mode === "selectors" && !value.selectors) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "selectors required when mode=selectors",
+      });
     }
-    if (value.mode === 'schema' && !value.jsonSchema) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'jsonSchema required when mode=schema' });
+    if (value.mode === "schema" && !value.jsonSchema) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "jsonSchema required when mode=schema",
+      });
     }
-    if (value.mode === 'plugin' && !value.plugin) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'plugin required when mode=plugin' });
+    if (value.mode === "plugin" && !value.plugin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "plugin required when mode=plugin",
+      });
     }
   });
 export type ExtractionConfig = z.infer<typeof ExtractionConfigSchema>;
 
 const ExtractStepSchema = z.object({
-  type: z.literal('extract'),
+  type: z.literal("extract"),
   args: ExtractionConfigSchema,
 });
 
-export const StepSchema = z.discriminatedUnion('type', [
+export const StepSchema = z.discriminatedUnion("type", [
   GotoStepSchema,
   SetHeadersStepSchema,
   SetCookiesStepSchema,
@@ -159,12 +175,27 @@ export type StepPlan = z.infer<typeof StepPlanSchema>;
 
 export const JobOptionsSchema = z.object({
   requiresBrowser: z.boolean().optional(),
-  browserEngine: BrowserEngineSchema.default('chromium'),
+  browserEngine: BrowserEngineSchema.default("chromium"),
   respectRobotsTxt: z.boolean().default(true),
   timeoutMs: z.number().int().min(1000).max(300000).default(60000),
   interactiveLogin: z.boolean().default(false),
+  proxy_profile: z.string().optional(),
+  country: z.string().optional(),
+  session_affinity: z.boolean().optional(),
+  rotation_strategy: z.enum(["per_request", "sticky", "random"]).optional(),
 });
 export type JobOptions = z.infer<typeof JobOptionsSchema>;
+
+export const PrivacyModeSchema = z.enum(["normal", "zero_trace"]);
+export type PrivacyMode = z.infer<typeof PrivacyModeSchema>;
+
+export const FreshnessModeSchema = z.enum([
+  "always",
+  "preferred",
+  "fallback",
+  "never",
+]);
+export type FreshnessMode = z.infer<typeof FreshnessModeSchema>;
 
 export const JobCreateRequestSchema = z.object({
   url: z.string().url(),
@@ -172,6 +203,8 @@ export const JobCreateRequestSchema = z.object({
   options: JobOptionsSchema.default({}),
   steps: StepPlanSchema.optional(),
   extract: ExtractionConfigSchema.optional(),
+  privacy_mode: PrivacyModeSchema.default("normal"),
+  freshness_mode: FreshnessModeSchema.default("preferred"),
 });
 export type JobCreateRequest = z.infer<typeof JobCreateRequestSchema>;
 
@@ -187,16 +220,28 @@ export const ExtractRequestSchema = z
   })
   .superRefine((value, ctx) => {
     if (!value.html && !value.text && !value.artifactId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'one of html, text, artifactId is required' });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "one of html, text, artifactId is required",
+      });
     }
-    if (value.mode === 'selectors' && !value.selectors) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'selectors required when mode=selectors' });
+    if (value.mode === "selectors" && !value.selectors) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "selectors required when mode=selectors",
+      });
     }
-    if (value.mode === 'schema' && !value.jsonSchema) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'jsonSchema required when mode=schema' });
+    if (value.mode === "schema" && !value.jsonSchema) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "jsonSchema required when mode=schema",
+      });
     }
-    if (value.mode === 'plugin' && !value.plugin) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'plugin required when mode=plugin' });
+    if (value.mode === "plugin" && !value.plugin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "plugin required when mode=plugin",
+      });
     }
   });
 export type ExtractRequest = z.infer<typeof ExtractRequestSchema>;
@@ -219,18 +264,37 @@ export const CrawlRequestSchema = z.object({
 });
 export type CrawlRequest = z.infer<typeof CrawlRequestSchema>;
 
-export const SearchEngineSchema = z.enum(['duckduckgo', 'bing', 'yahoo', 'google', 'brave']);
+export const SearchEngineSchema = z.enum([
+  "duckduckgo",
+  "bing",
+  "yahoo",
+  "google",
+  "brave",
+]);
 export type SearchEngine = z.infer<typeof SearchEngineSchema>;
 
-export const SafeSearchSchema = z.enum(['strict', 'moderate', 'off']);
+export const SafeSearchSchema = z.enum(["strict", "moderate", "off"]);
 export type SafeSearch = z.infer<typeof SafeSearchSchema>;
+
+export const SearchTopicSchema = z.enum(["general", "news", "finance"]);
+export type SearchTopic = z.infer<typeof SearchTopicSchema>;
 
 export const SearchRequestSchema = z.object({
   query: z.string().min(1).max(512),
   limit: z.number().int().min(1).max(20).default(10),
-  engine: SearchEngineSchema.default('duckduckgo'),
-  safeSearch: SafeSearchSchema.default('moderate'),
-  locale: z.string().min(2).max(16).default('us-en'),
+  engine: SearchEngineSchema.default("duckduckgo"),
+  safeSearch: SafeSearchSchema.default("moderate"),
+  locale: z.string().min(2).max(16).default("us-en"),
+  topic: SearchTopicSchema.default("general"),
+  include_images: z.boolean().default(false),
+  include_image_descriptions: z.boolean().default(false),
+  privacy_mode: PrivacyModeSchema.default("normal"),
+  freshness_mode: FreshnessModeSchema.default("preferred"),
+  location: z.string().optional(),
+  proxy_profile: z.string().optional(),
+  country: z.string().optional(),
+  session_affinity: z.boolean().optional(),
+  rotation_strategy: z.enum(["per_request", "sticky", "random"]).optional(),
 });
 export type SearchRequest = z.infer<typeof SearchRequestSchema>;
 
@@ -273,7 +337,12 @@ export const CreateApiTokenRequestSchema = z.object({
 export type CreateApiTokenRequest = z.infer<typeof CreateApiTokenRequestSchema>;
 
 export type ErrorResponse = {
-  error: { code: string; message: string; details?: unknown; requestId: string };
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+    requestId: string;
+  };
 };
 
 export type AuthContext = {
@@ -295,7 +364,12 @@ export type CrawlQueuePayload = {
   requestId: string;
 };
 
-export function createErrorResponse(code: string, message: string, requestId: string, details?: unknown): ErrorResponse {
+export function createErrorResponse(
+  code: string,
+  message: string,
+  requestId: string,
+  details?: unknown
+): ErrorResponse {
   return {
     error: {
       code,
@@ -308,12 +382,12 @@ export function createErrorResponse(code: string, message: string, requestId: st
 
 export function maskSecret(value: string): string {
   if (!value) return value;
-  if (value.length <= 4) return '****';
+  if (value.length <= 4) return "****";
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
 export function sanitizeStepForLogs(step: Step): Step {
-  if (step.type !== 'type') {
+  if (step.type !== "type") {
     return step;
   }
 
@@ -332,8 +406,8 @@ export function sanitizeStepForLogs(step: Step): Step {
 
 export function ensureHttpUrl(input: string): URL {
   const url = new URL(input);
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Only http/https URLs are allowed');
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Only http/https URLs are allowed");
   }
   return url;
 }
@@ -351,8 +425,8 @@ export const CrawlRequest = CrawlRequestSchema;
 export const SearchRequest = SearchRequestSchema;
 export const Recipe = RecipeSchema;
 
-export * from './artifacts.js';
-export * from './extraction.js';
-export * from './recipes.js';
-export * from './search.js';
-export * from './ssrf.js';
+export * from "./artifacts.js";
+export * from "./extraction.js";
+export * from "./recipes.js";
+export * from "./search.js";
+export * from "./ssrf.js";

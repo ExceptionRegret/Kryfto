@@ -1,5 +1,5 @@
-import { db, generateApiToken, hashToken, runMigrations } from './db/client.js';
-import { apiTokens, projects } from './db/schema.js';
+import { db, generateApiToken, hashToken, runMigrations } from "./db/client.js";
+import { apiTokens, projects } from "./db/schema.js";
 
 function argValue(flag: string, fallback?: string): string {
   const index = process.argv.indexOf(flag);
@@ -11,12 +11,15 @@ function argValue(flag: string, fallback?: string): string {
 }
 
 async function main(): Promise<void> {
-  const projectId = argValue('--project', process.env.KRYFTO_PROJECT_ID ?? 'default');
-  const name = argValue('--name', 'seed-admin');
-  const role = argValue('--role', 'admin');
+  const projectId = argValue(
+    "--project",
+    process.env.KRYFTO_PROJECT_ID ?? "default"
+  );
+  const name = argValue("--name", "seed-admin");
+  const role = argValue("--role", "admin");
 
-  if (!['admin', 'developer', 'readonly'].includes(role)) {
-    throw new Error('Role must be one of admin|developer|readonly');
+  if (!["admin", "developer", "readonly"].includes(role)) {
+    throw new Error("Role must be one of admin|developer|readonly");
   }
 
   await runMigrations();
@@ -33,10 +36,15 @@ async function main(): Promise<void> {
     .values({
       projectId,
       name,
-      role: role as 'admin' | 'developer' | 'readonly',
+      role: role as "admin" | "developer" | "readonly",
       tokenHash: hashToken(token),
     })
-    .returning({ id: apiTokens.id, role: apiTokens.role, projectId: apiTokens.projectId, name: apiTokens.name });
+    .returning({
+      id: apiTokens.id,
+      role: apiTokens.role,
+      projectId: apiTokens.projectId,
+      name: apiTokens.name,
+    });
 
   process.stdout.write(
     JSON.stringify(
@@ -51,7 +59,7 @@ async function main(): Promise<void> {
       2
     )
   );
-  process.stdout.write('\n');
+  process.stdout.write("\n");
 }
 
 main().catch((error) => {

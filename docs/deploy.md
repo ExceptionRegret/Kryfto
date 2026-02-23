@@ -9,6 +9,7 @@ cp .env.example .env
 ```
 
 Set at least:
+
 - `KRYFTO_API_TOKEN` (strong token)
 - `KRYFTO_BOOTSTRAP_ADMIN_TOKEN` (usually same initial value as above)
 - `POSTGRES_PASSWORD`
@@ -36,6 +37,7 @@ export AUTH_HEADER="Authorization: Bearer $KRYFTO_API_TOKEN"
 ## 4) Run Search (No External API Keys Required)
 
 All supported engines work without external API keys:
+
 - `duckduckgo`
 - `bing`
 - `yahoo`
@@ -70,6 +72,7 @@ curl -X POST http://localhost:8080/v1/search -H "$AUTH_HEADER" -H "Content-Type:
 ```
 
 Optional API acceleration (not required):
+
 - `BING_SEARCH_API_KEY`
 - `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_CX`
 - `BRAVE_SEARCH_API_KEY`
@@ -117,7 +120,9 @@ MCP tool: `search(query, limit?, engine?, safeSearch?, locale?)`
 If you are deploying Kryfto to a fresh naked Linux VPS (e.g., DigitalOcean Droplet, AWS EC2, Hetzner, Vultr), follow these steps to get your runtime online securely.
 
 ### Step 1: Install Docker & Docker Compose
+
 Connect to your VPS via SSH and run the official Docker installation script:
+
 ```bash
 # Update packages
 sudo apt-get update && sudo apt-get upgrade -y
@@ -131,6 +136,7 @@ sudo apt-get install docker-compose-plugin -y
 ```
 
 ### Step 2: Clone the Kryfto Repository
+
 ```bash
 # Install git if necessary
 sudo apt install git -y
@@ -141,6 +147,7 @@ cd kryfto
 ```
 
 ### Step 3: Configure Environment Variables
+
 You must generate a secure `.env` file containing your cryptographic secrets and tokens before starting the stack.
 
 ```bash
@@ -152,9 +159,10 @@ npm run setup:env
 # nano .env
 ```
 
-*Note: Make sure to copy the `KRYFTO_API_TOKEN` that was generated in the `.env` file somewhere safe! You will need it to authenticate requests to your VPS.*
+_Note: Make sure to copy the `KRYFTO_API_TOKEN` that was generated in the `.env` file somewhere safe! You will need it to authenticate requests to your VPS._
 
 ### Step 4: Boot the Infrastructure
+
 Kryfto uses Docker Compose to orchestrate the Node.js API, the background Headless Workers, Postgres, Redis, and MinIO storage.
 
 ```bash
@@ -163,16 +171,21 @@ sudo docker compose up -d --build
 ```
 
 ### Step 5: Verify Deployment
+
 Check that the containers are healthy:
+
 ```bash
 sudo docker compose ps
 ```
+
 You should see all containers (API, worker, postgres, redis, minio) with a status of `Up (healthy)`.
 
 ### Step 6: Security Recommendations
-By default, the Kryfto API exposes port `8080` to the internet. 
+
+By default, the Kryfto API exposes port `8080` to the internet.
 
 **For Production Use:**
+
 1. **Firewall:** Restrict access to port `8080` so that only trusted IP addresses (like your home IP or your Vercel/n8n backend IP) can reach it.
    ```bash
    sudo ufw allow ssh

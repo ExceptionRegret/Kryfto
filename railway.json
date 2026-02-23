@@ -1,14 +1,14 @@
 {
-    "$schema": "https://railway.app/railway.schema.json",
-    "build": {
-        "builder": "DOCKERFILE",
-        "dockerfilePath": "docker/api.Dockerfile"
-    },
-    "deploy": {
-        "startCommand": "node apps/api/dist/index.js",
-        "healthcheckPath": "/v1/healthz",
-        "healthcheckTimeout": 30,
-        "restartPolicyType": "ON_FAILURE",
-        "restartPolicyMaxRetries": 5
-    }
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "docker/api.Dockerfile"
+  },
+  "deploy": {
+    "startCommand": "node apps/api/dist/index.js",
+    "healthcheckPath": "/v1/healthz",
+    "healthcheckTimeout": 30,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
 }
