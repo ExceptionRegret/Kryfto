@@ -56,6 +56,8 @@ jobs:
         run: cp .env.example .env
 
       - name: Build and start compose
+        env:
+          KRYFTO_API_TOKEN: dev_admin_token_change_me
         run: docker compose up -d --build
 
       - name: Wait for API
