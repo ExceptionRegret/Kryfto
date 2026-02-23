@@ -176,6 +176,10 @@ Once `ssh user@your-vps-ip` logs you in instantly without a password, paste this
 #### 🏆 Kryfto vs. Built-in Agent Browsers
 Why install Kryfto when Claude and Cursor have built-in web search? Because Kryfto is engineered specifically for **evidence-based deterministic scraping** rather than noisy LLM-summarized search. 
 
+<div align="center">
+  <img src="assets/benchmark-proof.png" alt="Kryfto MCP vs Built-in Browser Benchmark" width="800" />
+</div>
+
 **Real-world benchmark (Query: `latest Next.js 15 features`):**
 * **Built-in Browser:** Returns a mix of non-official blogs (e.g., `nextjs15.com`), video results, and unstructured snippets. Fails to consistently identify the newest minor release. 
 * **Kryfto MCP:** Extracts the semantic release version (`15.5`) from the URL, automatically ranks the official `nextjs.org` blog at **Rank #1**, and extracts the raw Markdown documentation structure (headings, code blocks, publish date) in a single deterministic pass.
