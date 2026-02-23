@@ -17,9 +17,10 @@ function parseFile<T>(filePath: string): T {
 }
 
 function baseClient(): CollectorClient {
+  const token = process.env.API_TOKEN ?? process.env.KRYFTO_API_TOKEN;
   return new CollectorClient({
     baseUrl: process.env.API_BASE_URL ?? 'http://localhost:8080',
-    token: process.env.API_TOKEN ?? process.env.KRYFTO_API_TOKEN,
+    ...(token ? { token } : {}),
   });
 }
 
@@ -71,7 +72,7 @@ jobs
       {
         url: options.url,
         ...(options.recipe ? { recipeId: options.recipe } : {}),
-      },
+      } as any,
       {
         idempotencyKey: options.idempotencyKey,
         wait: Boolean(options.wait),
@@ -150,7 +151,7 @@ program
   .action(async (options) => {
     const result = await baseClient().search({
       query: options.query,
-      ...(options.limit ? { limit: options.limit } : {}),
+      limit: options.limit ?? 10,
       safeSearch: options.safeSearch,
       locale: options.locale,
       engine: options.engine,
