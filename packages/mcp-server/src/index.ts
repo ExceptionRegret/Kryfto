@@ -940,7 +940,7 @@ const TOOLS: any[] = [
 
 // ── Main Server ─────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  const server = new Server({ name: 'kryfto-mcp-server', version: '2.0.0' }, { capabilities: { tools: {} } });
+  const server = new Server({ name: 'kryfto-mcp-server', version: '3.0.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name; const args = request.params.arguments ?? {};
