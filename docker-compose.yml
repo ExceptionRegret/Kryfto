@@ -85,11 +85,15 @@ services:
     depends_on:
       minio:
         condition: service_started
-    entrypoint: >
-      /bin/sh -c " until /usr/bin/mc alias set local ${S3_ENDPOINT:-http://minio:9000} ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin}; do
+    entrypoint: |
+      /bin/sh -c "
+      until /usr/bin/mc alias set local ${S3_ENDPOINT:-http://minio:9000} ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin}; do
         echo 'Waiting for minio...'
         sleep 2
-      done /usr/bin/mc mb -p local/${S3_BUCKET:-collector-artifacts} || true; exit 0; "
+      done
+      /usr/bin/mc mb -p local/${S3_BUCKET:-collector-artifacts} || true;
+      exit 0;
+      "
 
   api-lite:
     profiles: [ "lite" ]
