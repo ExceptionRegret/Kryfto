@@ -162,6 +162,16 @@ Once `ssh user@your-vps-ip` logs you in instantly without a password, paste this
   }
 }
 ```
+
+#### 🏆 Kryfto vs. Built-in Agent Browsers
+Why install Kryfto when Claude and Cursor have built-in web search? Because Kryfto is engineered specifically for **evidence-based deterministic scraping** rather than noisy LLM-summarized search. 
+
+**Real-world benchmark (Query: `latest Next.js 15 features`):**
+* **Built-in Browser:** Returns a mix of non-official blogs (e.g., `nextjs15.com`), video results, and unstructured snippets. Fails to consistently identify the newest minor release. 
+* **Kryfto MCP:** Extracts the semantic release version (`15.5`) from the URL, automatically ranks the official `nextjs.org` blog at **Rank #1**, and extracts the raw Markdown documentation structure (headings, code blocks, publish date) in a single deterministic pass.
+
+> *"For this specific task and latest run, **I prefer MCP.** Reason: it returned the official `nextjs.org` 15.5 page first and gave structured output (`published_at`, sections, extracted markdown) in one step. - AI Assistant Verdict"*
+
 *Read the complete [MCP Documentation](docs/mcp.md) for full tool breakdowns.*
 
 ### 2. ⚡ n8n & Workflow Automation (Deep Dive)
