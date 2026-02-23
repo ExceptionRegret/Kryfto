@@ -53,11 +53,12 @@ jobs:
         run: pnpm install
 
       - name: Prepare env
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^KRYFTO_API_TOKEN=.*/KRYFTO_API_TOKEN=dev_admin_token_change_me/' .env
+          sed -i 's/^KRYFTO_BOOTSTRAP_ADMIN_TOKEN=.*/KRYFTO_BOOTSTRAP_ADMIN_TOKEN=dev_admin_token_change_me/' .env
 
       - name: Build and start compose
-        env:
-          KRYFTO_API_TOKEN: dev_admin_token_change_me
         run: docker compose up -d --build
 
       - name: Wait for API
