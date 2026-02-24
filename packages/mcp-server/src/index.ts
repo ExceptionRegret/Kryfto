@@ -6,8 +6,56 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import TurndownService from "turndown";
+// @ts-ignore
+import { gfm } from "turndown-plugin-gfm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { resolveEngineRedirect, getStealthHeaders, getRandomUA } from "@kryfto/shared";
+import {
+  normalizeUrl,
+  extractDomain,
+  isDomainAllowed,
+  isUrlAllowed,
+  HARD_BLOCK_DOMAINS,
+} from "./url-utils.js";
+import {
+  getDomainWeight,
+  TECH_DOMAIN_WEIGHTS,
+  analyzeIntent,
+  isRecencyQuery,
+  isOfficialSource,
+  isStrictOfficialSource,
+  buildSearchQuery,
+  extractQueryTerms,
+  snippetOverlapBonus,
+  titleMatchBonus,
+  authorityBonus,
+} from "./scoring.js";
+import {
+  DEFAULT_TRUST,
+  getDomainTrust,
+  customTrust,
+  recordTrustOutcome,
+} from "./trust.js";
+import {
+  shouldSkipEngine,
+  recordEngineSuccess,
+  recordEngineFailure,
+} from "./circuit-breaker.js";
+import {
+  createTrace,
+  startSpan,
+  endSpan,
+  finalizeTrace,
+} from "./trace.js";
+import type { TraceContext } from "./trace.js";
+import {
+  SERVER_VERSION,
+  EVAL_SCHEMA_VERSION,
+  RERANKER_VERSION,
+  TRUST_RULES_VERSION,
+  versionStamp,
+} from "./version.js";
 
 // ── Config ──────────────────────────────────────────────────────────
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:8080";
@@ -41,6 +89,7 @@ const turndown = new TurndownService({
   codeBlockStyle: "fenced",
   bulletListMarker: "-",
 });
+turndown.use(gfm);
 turndown.remove([
   "script",
   "style",
@@ -137,41 +186,7 @@ function setCache(
   cache.set(key, { data, cachedAt: Date.now(), ttlMs, html } as CacheEntry);
 }
 
-// ── URL Utils (#7) ──────────────────────────────────────────────────
-function normalizeUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hostname = u.hostname.replace(/^www\./u, "").toLowerCase();
-    for (const p of [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "fbclid",
-      "gclid",
-      "ref",
-      "source",
-    ])
-      u.searchParams.delete(p);
-    u.pathname = u.pathname.replace(/\/$/u, "") || "/";
-    return u.toString();
-  } catch {
-    return url;
-  }
-}
-function extractDomain(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./u, "");
-  } catch {
-    return "";
-  }
-}
-function isDomainAllowed(domain: string): boolean {
-  if (DOMAIN_BLOCKLIST.has(domain)) return false;
-  if (DOMAIN_ALLOWLIST.size > 0 && !DOMAIN_ALLOWLIST.has(domain)) return false;
-  return true;
-}
+// ── URL Utils (#7) — now imported from ./url-utils.js ───────────────
 
 // ── Date Utils (#9) ─────────────────────────────────────────────────
 const MONTHS: Record<string, string> = {
@@ -359,7 +374,7 @@ function classifyError(error: unknown): {
   return { error: "unknown", message: msg };
 }
 
-// ── Retry with Backoff (#21) ────────────────────────────────────────
+// ── Retry with Backoff (#21 & Phase 9) ────────────────────────────────────────
 async function withRetry<T>(
   fn: () => Promise<T>,
   retries = MAX_RETRIES
@@ -371,9 +386,23 @@ async function withRetry<T>(
     } catch (err) {
       last = err;
       const c = classifyError(err);
-      if (c.error === "blocked" || c.error === "not_found") throw err;
-      if (i < retries - 1)
-        await new Promise((r) => setTimeout(r, RETRY_BASE_MS * Math.pow(2, i)));
+      // Non-retryable errors — abort immediately
+      if (c.error === "not_found") throw err;
+      // #11: For blocked/captcha, only abort if not on last retry
+      // (Google sometimes returns transient 403s that clear on retry)
+      if (c.error === "blocked" && i >= retries - 1) throw err;
+      if (i < retries - 1) {
+        let baseMs = RETRY_BASE_MS;
+
+        // Phase 10: Aggressive backoff curve for 429s + network hangs
+        if (c.error === "rate_limited" || c.error === "timeout") {
+          baseMs = RETRY_BASE_MS * 3;
+        }
+
+        const jitter = Math.random() * 1000;
+        const delay = baseMs * Math.pow(2.5, i) + jitter;
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
   }
   throw last;
@@ -452,16 +481,16 @@ function getSLODashboard(toolFilter?: string, windowMinutes = 60) {
     overallSuccessRate:
       records.length > 0
         ? Math.round(
-            (records.filter((r) => r.success).length / records.length) * 10000
-          ) / 100
+          (records.filter((r) => r.success).length / records.length) * 10000
+        ) / 100
         : 100,
     latencySummary:
       allLatencies.length > 0
         ? {
-            p50: percentile(allLatencies, 50),
-            p95: percentile(allLatencies, 95),
-            p99: percentile(allLatencies, 99),
-          }
+          p50: percentile(allLatencies, 50),
+          p95: percentile(allLatencies, 95),
+          p99: percentile(allLatencies, 99),
+        }
         : { p50: 0, p95: 0, p99: 0 },
     freshness: {
       cachedResponses: records.filter((r) => r.cached).length,
@@ -574,7 +603,7 @@ const EVAL_QUERIES = [
   },
 ];
 
-async function runEvalSuite(subset?: string[]) {
+export async function runEvalSuite(subset?: string[]) {
   const queries = subset
     ? EVAL_QUERIES.filter((q) => subset.includes(q.id))
     : EVAL_QUERIES;
@@ -586,8 +615,14 @@ async function runEvalSuite(subset?: string[]) {
     latencyMs: number;
     resultCount: number;
     officialHit: boolean;
+    precisionAt5: number;
+    readSuccess: { success: number; total: number };
     details: string;
   }[] = [];
+
+  let totalReads = 0;
+  let totalReadSuccess = 0;
+
   for (const q of queries) {
     const start = Date.now();
     try {
@@ -596,6 +631,17 @@ async function runEvalSuite(subset?: string[]) {
       const officialHit = q.expectedDomains.some((ed) =>
         domains.some((d) => d.includes(ed))
       );
+
+      // Phase 9: Test Read Success Rate
+      const topUrls = r.results.slice(0, 2).map(r => r.url);
+      const readResults = await Promise.allSettled(
+        topUrls.map(url => readUrl(url, { timeoutMs: 15000 }))
+      );
+
+      const successes = readResults.filter(p => p.status === "fulfilled" && !(p.value as any)?.error).length;
+      totalReads += topUrls.length;
+      totalReadSuccess += successes;
+
       results.push({
         id: q.id,
         query: q.query,
@@ -604,11 +650,13 @@ async function runEvalSuite(subset?: string[]) {
         latencyMs: Date.now() - start,
         resultCount: r.results.length,
         officialHit,
+        precisionAt5: r.results.length === 0 ? 0 : r.results.slice(0, 5).filter(res => q.expectedDomains.some(ed => res.source_domain.includes(ed))).length / Math.min(r.results.length, 5),
+        readSuccess: { success: successes, total: topUrls.length },
         details: officialHit
           ? `Found: ${domains.slice(0, 3).join(", ")}`
           : `Expected: ${q.expectedDomains.join(",")} but got: ${domains
-              .slice(0, 3)
-              .join(", ")}`,
+            .slice(0, 3)
+            .join(", ")}`,
       });
     } catch (e) {
       results.push({
@@ -619,6 +667,8 @@ async function runEvalSuite(subset?: string[]) {
         latencyMs: Date.now() - start,
         resultCount: 0,
         officialHit: false,
+        precisionAt5: 0,
+        readSuccess: { success: 0, total: 0 },
         details: String(e),
       });
     }
@@ -628,33 +678,68 @@ async function runEvalSuite(subset?: string[]) {
     results.reduce((s, r) => s + r.latencyMs, 0) / results.length
   );
   const precision = Math.round((passCount / results.length) * 10000) / 100;
+
+  // Phase 10: precision@5 >= 75%
+  const precisionAt5 = Math.round(
+    (results.reduce((s, r) => s + r.precisionAt5, 0) / results.length) * 10000
+  ) / 100;
+
   const thresholds = {
-    minPrecision: 60,
-    maxAvgLatencyMs: 5000,
-    minOfficialHitRate: 50,
+    minPrecision: 70,
+    minPrecisionAt5: 80,
+    maxAvgLatencyMs: 7000,
+    minOfficialHitRate: 85,
+    minReadSuccessRate: 97,
+    minSearchSuccessRate: 99,
   };
   const officialHitRate =
     Math.round(
       (results.filter((r) => r.officialHit).length / results.length) * 10000
     ) / 100;
-  const sloPass =
-    precision >= thresholds.minPrecision &&
-    avgLatency <= thresholds.maxAvgLatencyMs &&
-    officialHitRate >= thresholds.minOfficialHitRate;
+  const readSuccessRate = totalReads > 0
+    ? Math.round((totalReadSuccess / totalReads) * 10000) / 100
+    : 100;
+  const searchSuccessRate =
+    Math.round(
+      (results.filter((r) => r.resultCount > 0).length / results.length) * 10000
+    ) / 100;
+
+  // #9 Per-metric failure reasons
+  const failedMetrics: string[] = [];
+  if (precision < thresholds.minPrecision)
+    failedMetrics.push(`precision: ${precision}% < ${thresholds.minPrecision}%`);
+  if (precisionAt5 < thresholds.minPrecisionAt5)
+    failedMetrics.push(`precisionAt5: ${precisionAt5}% < ${thresholds.minPrecisionAt5}%`);
+  if (avgLatency > thresholds.maxAvgLatencyMs)
+    failedMetrics.push(`avgLatency: ${avgLatency}ms > ${thresholds.maxAvgLatencyMs}ms`);
+  if (officialHitRate < thresholds.minOfficialHitRate)
+    failedMetrics.push(`officialHitRate: ${officialHitRate}% < ${thresholds.minOfficialHitRate}%`);
+  if (readSuccessRate < thresholds.minReadSuccessRate)
+    failedMetrics.push(`readSuccessRate: ${readSuccessRate}% < ${thresholds.minReadSuccessRate}%`);
+  if (searchSuccessRate < thresholds.minSearchSuccessRate)
+    failedMetrics.push(`searchSuccessRate: ${searchSuccessRate}% < ${thresholds.minSearchSuccessRate}%`);
+
+  const sloPass = failedMetrics.length === 0;
+
   return {
-    suiteName: "kryfto-eval-v1",
+    suiteName: `kryfto-eval-${EVAL_SCHEMA_VERSION}`,
     runAt: new Date().toISOString(),
     totalQueries: results.length,
     passed: passCount,
     failed: results.length - passCount,
     precision,
+    precisionAt5,
     avgLatencyMs: avgLatency,
     officialHitRate,
+    readSuccessRate,
+    searchSuccessRate,
     thresholds,
     sloPass,
+    failedMetrics,
     verdict: sloPass
       ? "PASS — meets all SLO thresholds"
-      : "FAIL — below SLO thresholds",
+      : `FAIL — ${failedMetrics.join("; ")}`,
+    ...versionStamp(),
     results,
   };
 }
@@ -688,7 +773,7 @@ function asText(
               latencyMs: latency,
               cached: isCached,
               ...(meta?.tool ? { tool: meta.tool } : {}),
-              serverVersion: "3.0.0",
+              ...versionStamp(),
             },
           },
           null,
@@ -712,7 +797,7 @@ function asError(
             error: cat,
             message: msg,
             ...ctx,
-            _meta: { serverVersion: "3.0.0" },
+            _meta: { ...versionStamp() },
           },
           null,
           2
@@ -722,90 +807,8 @@ function asError(
   };
 }
 
-// ── Primary Source (#11) ────────────────────────────────────────────
-const OFFICIAL_PATTERNS = [
-  ".org",
-  ".edu",
-  ".gov",
-  "docs.",
-  "developer.",
-  "github.com/",
-  "gitlab.com/",
-  "arxiv.org",
-];
-function isOfficialSource(d: string): boolean {
-  return OFFICIAL_PATTERNS.some((p) => d.includes(p));
-}
-
-// Strong default domain weights for technical queries (#4 official-source prioritization)
-const TECH_DOMAIN_WEIGHTS: Record<string, number> = {
-  "react.dev": 100,
-  "nextjs.org": 100,
-  "vuejs.org": 100,
-  "angular.dev": 100,
-  "svelte.dev": 100,
-  "nodejs.org": 100,
-  "typescriptlang.org": 100,
-  "python.org": 100,
-  "rust-lang.org": 100,
-  "go.dev": 100,
-  "tailwindcss.com": 90,
-  "postgresql.org": 100,
-  "docs.docker.com": 95,
-  "kubernetes.io": 100,
-  "github.com": 80,
-  "developer.mozilla.org": 95,
-  "docs.github.com": 90,
-  "vercel.com": 80,
-  "deno.land": 90,
-};
-function getDomainWeight(domain: string): number {
-  const d = domain.replace(/^www\./u, "").toLowerCase();
-  if (TECH_DOMAIN_WEIGHTS[d] !== undefined) return TECH_DOMAIN_WEIGHTS[d]!;
-  if (d.endsWith(".org") || d.endsWith(".edu") || d.endsWith(".gov")) return 70;
-  if (d.startsWith("docs.") || d.startsWith("developer.")) return 75;
-  if (isOfficialSource(d)) return 60;
-  return 30;
-}
-
-// Recency detector — detect if query is asking about latest/newest
-const RECENCY_KEYWORDS = [
-  "latest",
-  "newest",
-  "recent",
-  "update",
-  "release",
-  "new features",
-  "what's new",
-  "changelog",
-  "breaking changes",
-  "migration",
-  "upgrade",
-  "v2",
-  "v3",
-  "v4",
-  "v5",
-  "2024",
-  "2025",
-  "2026",
-];
-function isRecencyQuery(query: string): boolean {
-  const lower = query.toLowerCase();
-  return RECENCY_KEYWORDS.some((k) => lower.includes(k));
-}
-
-// ── #3: Query Operator Support ──────────────────────────────────────
-function buildSearchQuery(
-  query: string,
-  opts?: { site?: string; exclude?: string[]; inurl?: string }
-): string {
-  let q = query;
-  if (opts?.site) q = `site:${opts.site} ${q}`;
-  if (opts?.inurl) q = `inurl:${opts.inurl} ${q}`;
-  if (opts?.exclude?.length)
-    q += ` ${opts.exclude.map((e) => `-${e}`).join(" ")}`;
-  return q;
-}
+// ── Scoring & Intent — now imported from ./scoring.js ───────────────
+// ── Query Operators — now imported from ./scoring.js ────────────────
 
 // ── Zod Schemas ─────────────────────────────────────────────────────
 const engineEnum = z.enum(["duckduckgo", "bing", "yahoo", "google", "brave"]);
@@ -978,10 +981,29 @@ async function federatedSearch(
     durationMs: number;
     resultCount: number;
   }[] = [];
+  // #10 Observability: trace context when debug is on
+  const trace = opts.debug ? createTrace("federatedSearch") : undefined;
 
   for (const engine of engineList) {
+    // #4 Circuit breaker: skip engines with open circuits
+    if (shouldSkipEngine(engine)) {
+      enginesFailed.push({
+        engine,
+        error: "blocked" as ErrorCategory,
+        message: `Circuit open for engine '${engine}', skipping`,
+      });
+      if (opts.debug)
+        debugSteps.push({
+          engine,
+          action: "circuit_open",
+          durationMs: 0,
+          resultCount: 0,
+        });
+      continue;
+    }
     enginesTried.push(engine);
     const t = Date.now();
+    const engineSpan = trace ? startSpan(trace, `engine:${engine}`, { engine }) : undefined;
     try {
       const result = await withRetry(() =>
         scopedClient("search").search({
@@ -1015,6 +1037,114 @@ async function federatedSearch(
           resultCount: count,
         });
       if (count === 0) {
+        // #11: Google retry — strip operators and retry with plain query once
+        if (engine === "google" && finalQuery !== query) {
+          try {
+            const retryResult = await withRetry(
+              () =>
+                scopedClient("search").search({
+                  query,
+                  limit: internalLimit,
+                  engine: "google",
+                  safeSearch: opts.safeSearch ?? "moderate",
+                  locale: opts.locale ?? "us-en",
+                } as any),
+              1
+            );
+            const retryCount = retryResult.results?.length ?? 0;
+            if (retryCount > 0) {
+              if (opts.debug)
+                debugSteps.push({
+                  engine: "google_retry",
+                  action: "search",
+                  durationMs: Date.now() - t,
+                  resultCount: retryCount,
+                });
+              recordEngineSuccess(engine);
+              enginesSucceeded.push(engine);
+              for (const r of retryResult.results) {
+                const resolvedUrl = resolveEngineRedirect(r.url);
+                const normalized = normalizeUrl(resolvedUrl);
+                const domain = extractDomain(resolvedUrl);
+                if (seenUrls.has(normalized)) continue;
+                seenUrls.add(normalized);
+                if (!isUrlAllowed(normalized, domain, DOMAIN_BLOCKLIST, DOMAIN_ALLOWLIST)) continue;
+                if (opts.officialOnly && !isStrictOfficialSource(domain)) continue;
+                allResults.push({
+                  title: r.title,
+                  url: resolvedUrl,
+                  normalizedUrl: normalized,
+                  snippet: r.snippet,
+                  published_at: r.snippet ? extractDateFromText(r.snippet) : undefined,
+                  source_domain: domain,
+                  rank: allResults.length + 1,
+                  engine_used: "google",
+                  confidence: "medium",
+                  is_official: isOfficialSource(domain),
+                });
+              }
+              if (engineSpan && trace) endSpan(trace, engineSpan);
+              continue;
+            }
+          } catch {
+            // retry also failed, fall through to failure path
+          }
+        }
+        // #11: Google fallback 2 — sanitize query encoding, drop locale restrictions
+        if (engine === "google") {
+          try {
+            const sanitizedQuery = query.replace(/[^\x20-\x7E]/g, " ").trim().substring(0, 200);
+            const retryResult2 = await withRetry(
+              () =>
+                scopedClient("search").search({
+                  query: sanitizedQuery,
+                  limit: internalLimit,
+                  engine: "google",
+                  safeSearch: opts.safeSearch ?? "moderate",
+                  locale: "us-en",
+                } as any),
+              1
+            );
+            const retryCount2 = retryResult2.results?.length ?? 0;
+            if (retryCount2 > 0) {
+              if (opts.debug)
+                debugSteps.push({
+                  engine: "google_sanitized_retry",
+                  action: "search",
+                  durationMs: Date.now() - t,
+                  resultCount: retryCount2,
+                });
+              recordEngineSuccess(engine);
+              enginesSucceeded.push(engine);
+              for (const r of retryResult2.results) {
+                const resolvedUrl = resolveEngineRedirect(r.url);
+                const normalized = normalizeUrl(resolvedUrl);
+                const domain = extractDomain(resolvedUrl);
+                if (seenUrls.has(normalized)) continue;
+                seenUrls.add(normalized);
+                if (!isUrlAllowed(normalized, domain, DOMAIN_BLOCKLIST, DOMAIN_ALLOWLIST)) continue;
+                if (opts.officialOnly && !isStrictOfficialSource(domain)) continue;
+                allResults.push({
+                  title: r.title,
+                  url: resolvedUrl,
+                  normalizedUrl: normalized,
+                  snippet: r.snippet,
+                  published_at: r.snippet ? extractDateFromText(r.snippet) : undefined,
+                  source_domain: domain,
+                  rank: allResults.length + 1,
+                  engine_used: "google",
+                  confidence: "medium",
+                  is_official: isOfficialSource(domain),
+                });
+              }
+              if (engineSpan && trace) endSpan(trace, engineSpan);
+              continue;
+            }
+          } catch {
+            // sanitized retry also failed, fall through
+          }
+        }
+        recordEngineFailure(engine);
         enginesFailed.push({
           engine,
           error: "empty_engine",
@@ -1025,17 +1155,20 @@ async function federatedSearch(
         });
         continue;
       }
+      recordEngineSuccess(engine);
       enginesSucceeded.push(engine);
       for (const r of result.results) {
-        const normalized = normalizeUrl(r.url);
-        const domain = extractDomain(r.url);
+        // #1 Redirect canonicalization: resolve engine wrappers before normalizing
+        const resolvedUrl = resolveEngineRedirect(r.url);
+        const normalized = normalizeUrl(resolvedUrl);
+        const domain = extractDomain(resolvedUrl);
         if (seenUrls.has(normalized)) continue;
         seenUrls.add(normalized);
-        if (!isDomainAllowed(domain)) continue; // #26
-        if (opts.officialOnly && !isOfficialSource(domain)) continue; // #11
+        if (!isUrlAllowed(normalized, domain, DOMAIN_BLOCKLIST, DOMAIN_ALLOWLIST)) continue;
+        if (opts.officialOnly && !isStrictOfficialSource(domain)) continue;
         allResults.push({
           title: r.title,
-          url: r.url,
+          url: resolvedUrl,
           normalizedUrl: normalized,
           snippet: r.snippet,
           published_at: r.snippet ? extractDateFromText(r.snippet) : undefined,
@@ -1046,8 +1179,11 @@ async function federatedSearch(
           is_official: isOfficialSource(domain),
         });
       }
+      if (engineSpan && trace) endSpan(trace, engineSpan);
       if (!opts.engines && allResults.length >= limit) break;
     } catch (err) {
+      if (engineSpan && trace) endSpan(trace, engineSpan);
+      recordEngineFailure(engine);
       const c = classifyError(err);
       enginesFailed.push({ engine, error: c.error, message: c.message });
       if (opts.debug)
@@ -1059,17 +1195,33 @@ async function federatedSearch(
         });
     }
   }
-  // Deterministic scoring: combine domain weight + official status + recency
-  const wantsRecent = isRecencyQuery(query) || opts.sortByDate;
+  // Deterministic scoring: combine domain weight + official status + recency + reranker signals
+  const scoringSpan = trace ? startSpan(trace, "scoring") : undefined;
+  const intent = analyzeIntent(query);
+  const wantsRecent = isRecencyQuery(query) || opts.sortByDate || intent === "news";
+  const queryTerms = extractQueryTerms(query);
   for (const r of allResults) {
-    const domainScore = getDomainWeight(r.source_domain);
+    let domainScore = getDomainWeight(r.source_domain);
+
+    // Phase 10 Intent-based Reranking Shift
+    if (intent === "troubleshooting") {
+      if (r.source_domain.includes("stackoverflow.com") || r.source_domain.includes("github.com")) {
+        domainScore += 30;
+      }
+    } else if (intent === "documentation") {
+      if (r.is_official) {
+        domainScore += 30;
+      }
+    }
+
     const officialBonus = r.is_official ? 20 : 0;
+
     let recencyBonus = 0;
     if (wantsRecent && r.published_at) {
       const ageMs = Date.now() - new Date(r.published_at).getTime();
-      if (ageMs < 30 * 86400000) recencyBonus = 30;
-      else if (ageMs < 90 * 86400000) recencyBonus = 20;
-      else if (ageMs < 365 * 86400000) recencyBonus = 10;
+      if (ageMs < 30 * 86400000) recencyBonus = intent === "news" ? 60 : 30;
+      else if (ageMs < 90 * 86400000) recencyBonus = intent === "news" ? 40 : 20;
+      else if (ageMs < 365 * 86400000) recencyBonus = intent === "news" ? 20 : 10;
     }
 
     // Version heuristic: if looking for latest, reward URLs with newer semantic versioning patterns
@@ -1086,8 +1238,13 @@ async function federatedSearch(
       }
     }
 
+    // #3 Relevance reranker signals
+    const snippetBonus = snippetOverlapBonus(r.snippet, queryTerms);
+    const titleBonus = titleMatchBonus(r.title, queryTerms);
+    const authBonus = authorityBonus(r.source_domain, intent);
+
     (r as any)._score =
-      domainScore + officialBonus + recencyBonus + versionBonus;
+      domainScore + officialBonus + recencyBonus + versionBonus + snippetBonus + titleBonus + authBonus;
   }
   // Sort by deterministic score (stable ranking across runs)
   allResults.sort(
@@ -1132,10 +1289,13 @@ async function federatedSearch(
       return ((b as any)._score ?? 0) - ((a as any)._score ?? 0);
     });
   }
+  if (scoringSpan && trace) endSpan(trace, scoringSpan);
   allResults.forEach((r, i) => {
     r.rank = i + 1;
     delete (r as any)._score;
   });
+  // #10 Finalize trace
+  const traceOutput = trace ? finalizeTrace(trace) : undefined;
   return {
     results: allResults.slice(0, limit),
     engines_tried: enginesTried,
@@ -1143,6 +1303,12 @@ async function federatedSearch(
     engines_failed: enginesFailed,
     ...(wantsRecent ? { recency_aware: true } : {}),
     ...(opts.debug ? { debug_steps: debugSteps } : {}),
+    ...(traceOutput ? { _trace: traceOutput } : {}),
+    _versions: {
+      reranker: RERANKER_VERSION,
+      trustRules: TRUST_RULES_VERSION,
+      server: SERVER_VERSION,
+    },
   };
 }
 
@@ -1178,10 +1344,7 @@ async function readUrl(
     if (opts?.privacy_mode === "zero_trace") {
       const t = Date.now();
       const res = await fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Kryfto-PrivacyBot/1.0",
-        },
+        headers: getStealthHeaders("unknown", getRandomUA()),
       });
       if (!res.ok)
         throw new Error(`HTTP_ERROR ${res.status} ${res.statusText}`);
@@ -1299,6 +1462,8 @@ async function readUrl(
     if (opts?.debug) result.debug_steps = debugSteps;
     if (opts?.privacy_mode !== "zero_trace")
       setCache(cacheKey, result, CACHE_DEFAULT_TTL_MS, html);
+    // #8 Trust decay: record success
+    recordTrustOutcome(extractDomain(url), true);
     return result;
   } catch (err: unknown) {
     if (
@@ -1313,6 +1478,8 @@ async function readUrl(
         _cachedAt: new Date(cached.cachedAt!).toISOString(),
       };
     }
+    // #8 Trust decay: record failure
+    recordTrustOutcome(extractDomain(url), false);
     const c = classifyError(err);
     return {
       url,
@@ -1325,6 +1492,8 @@ async function readUrl(
 }
 
 // ── Unified Research Pipeline (search→read→extract in one call) ────
+const RESEARCH_TIMEOUT_MS = 45_000;
+
 async function research(
   query: string,
   opts?: {
@@ -1337,6 +1506,8 @@ async function research(
     privacy_mode?: "normal" | "zero_trace";
   }
 ) {
+  const researchStart = Date.now();
+  const startSearch = Date.now();
   const searchResult = await federatedSearch(query, {
     limit: opts?.limit ?? 5,
     topic: opts?.topic,
@@ -1344,24 +1515,41 @@ async function research(
     include_image_descriptions: opts?.include_image_descriptions,
     privacy_mode: opts?.privacy_mode,
   } as any);
+  const searchLatency = Date.now() - startSearch;
   const readTop = opts?.readTop ?? 1;
+  const startReadLoop = Date.now();
   const pages: Record<string, unknown>[] = [];
+  const failures: { url: string; error: string; reason: string }[] = [];
+  let timedOut = false;
   for (let i = 0; i < Math.min(readTop, searchResult.results.length); i++) {
+    // #7 Research reliability: check elapsed time before each read
+    if (Date.now() - researchStart >= RESEARCH_TIMEOUT_MS) {
+      timedOut = true;
+      break;
+    }
     const sr = searchResult.results[i]!;
     try {
+      const readStart = Date.now();
       const page = await readUrl(sr.url, {
         timeoutMs: 20000,
         sections: opts?.sections ?? true,
         ...(opts?.privacy_mode ? { privacy_mode: opts.privacy_mode } : {}),
       });
+      if ((page as any)._failed || (page as any).error) {
+        const c = classifyError(new Error((page as any).message ?? "read_failed"));
+        failures.push({ url: sr.url, error: c.error, reason: c.message });
+      }
       pages.push({
         ...page,
+        latencyMs: Date.now() - readStart,
         searchRank: sr.rank,
         searchEngine: sr.engine_used,
         searchDomain: sr.source_domain,
         searchIsOfficial: sr.is_official,
       });
-    } catch {
+    } catch (err) {
+      const c = classifyError(err);
+      failures.push({ url: sr.url, error: c.error, reason: c.message });
       pages.push({ url: sr.url, error: "read_failed", searchRank: sr.rank });
     }
   }
@@ -1369,6 +1557,13 @@ async function research(
     query,
     searchResultCount: searchResult.results.length,
     pagesRead: pages.length,
+    ...(timedOut ? { partial: true, failures } : {}),
+    ...(failures.length > 0 && !timedOut ? { failures } : {}),
+    timings: {
+      search: searchLatency,
+      readPhase: Date.now() - startReadLoop,
+      total: Date.now() - researchStart,
+    },
     results: searchResult.results,
     pages,
     engines_tried: searchResult.engines_tried,
@@ -1451,10 +1646,16 @@ function startAsyncResearch(query: string, opts: any) {
             searchRank: sr.rank,
             searchEngine: sr.engine_used,
           });
-        } catch {
+        } catch (readErr) {
+          const c = classifyError(readErr);
+          job.progress.push({
+            timestamp: new Date().toISOString(),
+            message: `Read error for ${sr.url}: [${c.error}] ${c.message}`,
+          });
           pages.push({
             url: sr.url,
             error: "read_failed",
+            errorCategory: c.error,
             searchRank: sr.rank,
           });
         }
@@ -1479,6 +1680,162 @@ function startAsyncResearch(query: string, opts: any) {
           message: "Job cancelled by user.",
         });
       } else {
+        const c = classifyError(e);
+        job.state = "failed";
+        job.error = `[${c.error}] ${c.message}`;
+        job.progress.push({
+          timestamp: new Date().toISOString(),
+          message: `Error: [${c.error}] ${c.message}`,
+        });
+      }
+    }
+  });
+  return { jobId: id, state: "running", message: "Job started" };
+}
+
+// ── Continuous Research Agent (#10) ─────────────────────────────
+const continuousResearchJobs = new Map<
+  string,
+  {
+    id: string;
+    state: "running" | "completed" | "failed" | "cancelled";
+    query: string;
+    intervalMinutes: number;
+    webhookUrl: string | undefined;
+    progress: { timestamp: string; message: string }[];
+    error?: string;
+    abort: AbortController;
+  }
+>();
+
+function startContinuousResearch(query: string, opts: { intervalMinutes?: number | undefined, webhookUrl?: string | undefined }) {
+  const id = randomUUID().substring(0, 8);
+  const ac = new AbortController();
+  const intervalMinutes = opts.intervalMinutes ?? 60;
+
+  const job: {
+    id: string;
+    state: "running" | "completed" | "failed" | "cancelled";
+    query: string;
+    intervalMinutes: number;
+    webhookUrl: string | undefined;
+    progress: { timestamp: string; message: string }[];
+    error?: string;
+    abort: AbortController;
+  } = {
+    id,
+    state: "running",
+    query,
+    intervalMinutes,
+    webhookUrl: opts.webhookUrl,
+    progress: [
+      {
+        timestamp: new Date().toISOString(),
+        message: `Started continuous research for "${query}" every ${intervalMinutes}m`,
+      },
+    ],
+    abort: ac,
+  };
+  continuousResearchJobs.set(id, job);
+
+  Promise.resolve().then(async () => {
+    try {
+      const watchedUrls = new Set<string>();
+
+      while (!ac.signal.aborted) {
+        job.progress.push({
+          timestamp: new Date().toISOString(),
+          message: "Starting continuous research cycle...",
+        });
+
+        // 1. Detect: Search
+        const searchResult = await federatedSearch(query, { limit: 5 });
+        if (ac.signal.aborted) throw new Error("Cancelled");
+
+        job.progress.push({
+          timestamp: new Date().toISOString(),
+          message: `Discovered ${searchResult.results.length} relevant URLs.`,
+        });
+
+        const newFindings: string[] = [];
+
+        for (const sr of searchResult.results) {
+          if (ac.signal.aborted) throw new Error("Cancelled");
+
+          if (!watchedUrls.has(sr.url)) {
+            watchedUrls.add(sr.url);
+            // 2. Watch First Time
+            try {
+              const pageContext = await readUrl(sr.url, { timeoutMs: 20000, sections: true });
+
+              // 3. Cite / Extract
+              const md = (pageContext.markdown as string) ?? "";
+              const lines = md.split("\n").filter(l => l.trim().length > 30).slice(0, 2);
+              if (lines.length > 0) {
+                newFindings.push(`New source [${sr.source_domain}]: ${lines[0]}`);
+              }
+            } catch (e) {
+              continue;
+            }
+          } else {
+            // Already watching, do a semantic diff / check watch
+            try {
+              const changes = (await detectChanges(sr.url, 20000)) as any;
+              if (changes.status === "changed") {
+                const added = (changes.diff?.addedContent ?? []) as string[];
+                const meaningful = added.filter((l: string) => l.length > 40).slice(0, 2);
+                if (meaningful.length > 0) {
+                  newFindings.push(`Update on [${sr.source_domain}]: ${meaningful[0]}`);
+                }
+              }
+            } catch (e) {
+              continue;
+            }
+          }
+        }
+
+        // 4. Alert
+        if (newFindings.length > 0 && opts.webhookUrl) {
+          job.progress.push({
+            timestamp: new Date().toISOString(),
+            message: `Alerting webhook on ${newFindings.length} new findings.`,
+          });
+          try {
+            await fetch(opts.webhookUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                jobId: id,
+                query,
+                timestamp: new Date().toISOString(),
+                newFindings,
+              }),
+            });
+          } catch { }
+        }
+
+        job.progress.push({
+          timestamp: new Date().toISOString(),
+          message: `Cycle complete. Sleeping for ${intervalMinutes} minutes.`,
+        });
+
+        // Sleep loop
+        let waitedMs = 0;
+        const totalWaitMs = intervalMinutes * 60 * 1000;
+        while (waitedMs < totalWaitMs) {
+          if (ac.signal.aborted) throw new Error("Cancelled");
+          await new Promise((r) => setTimeout(r, 5000));
+          waitedMs += 5000;
+        }
+      }
+    } catch (e: any) {
+      if (e.message === "Cancelled") {
+        job.state = "cancelled";
+        job.progress.push({
+          timestamp: new Date().toISOString(),
+          message: "Job cancelled by user.",
+        });
+      } else {
         job.state = "failed";
         job.error = e.message;
         job.progress.push({
@@ -1488,7 +1845,8 @@ function startAsyncResearch(query: string, opts: any) {
       }
     }
   });
-  return { jobId: id, state: "running", message: "Job started" };
+
+  return { jobId: id, state: "running", message: "Continuous research job started" };
 }
 
 // ── #15: Change Detection ───────────────────────────────────────────
@@ -1559,22 +1917,34 @@ async function citationSearch(claims: string[], limit = 3) {
           limit,
           officialOnly: true,
         });
-        return {
-          claim,
-          sources: result.results.map((r) => ({
+
+        const sources = result.results.map((r) => {
+          const isHigh = r.is_official;
+          const hasSnippet = r.snippet?.toLowerCase().includes(claim.toLowerCase().split(" ").slice(0, 3).join(" "));
+          return {
             url: r.url,
             title: r.title,
             snippet: r.snippet ?? "",
-            confidence: (r.is_official
-              ? "high"
-              : r.snippet
-                  ?.toLowerCase()
-                  .includes(
-                    claim.toLowerCase().split(" ").slice(0, 3).join(" ")
-                  )
-              ? "medium"
-              : "low") as "high" | "medium" | "low",
-          })),
+            confidence: (isHigh ? "high" : hasSnippet ? "medium" : "low") as "high" | "medium" | "low",
+          };
+        });
+
+        const hasStrongEvidence = sources.some(s =>
+          (s.confidence === "high" || s.confidence === "medium") &&
+          getDomainTrust(extractDomain(s.url)).trust >= 0.7
+        );
+        if (!hasStrongEvidence && sources.length > 0) {
+          return {
+            claim,
+            error: "insufficient_evidence",
+            message: "Search yielded results, but none met the necessary confidence threshold. Please broaden the query.",
+            sources: [] as any[],
+          };
+        }
+
+        return {
+          claim,
+          sources,
         };
       } catch {
         return {
@@ -1667,9 +2037,8 @@ async function githubIssues(
   limit = 10,
   labels?: string
 ) {
-  const url = `https://api.github.com/repos/${repo}/issues?state=${state}&per_page=${limit}${
-    labels ? `&labels=${labels}` : ""
-  }`;
+  const url = `https://api.github.com/repos/${repo}/issues?state=${state}&per_page=${limit}${labels ? `&labels=${labels}` : ""
+    }`;
   const res = await fetch(url, { headers: GH_HEADERS });
   if (!res.ok) throw new Error(`GitHub API: ${res.status}`);
   const issues = (await res.json()) as any[];
@@ -1722,11 +2091,11 @@ async function devIntel(framework: string, type = "latest_changes") {
     search: searchResult,
     topPage: topPage
       ? {
-          title: topPage.title,
-          url: topPage.url,
-          published_at: topPage.published_at,
-          markdown: (topPage.markdown as string)?.substring(0, 15000),
-        }
+        title: topPage.title,
+        url: topPage.url,
+        published_at: topPage.published_at,
+        markdown: (topPage.markdown as string)?.substring(0, 15000),
+      }
       : undefined,
   };
 }
@@ -1759,35 +2128,7 @@ function listMonitors() {
 }
 // ── Phase 5: Advanced Intelligence Tools ────────────────────────────
 
-// #31: Source Trust Graph — domain/repo/author trust scoring
-const DEFAULT_TRUST: Record<string, number> = {
-  "github.com": 0.9,
-  "arxiv.org": 0.95,
-  "stackoverflow.com": 0.7,
-  "medium.com": 0.4,
-  "dev.to": 0.5,
-  "reddit.com": 0.35,
-  "wikipedia.org": 0.8,
-};
-const customTrust = new Map<string, number>();
-function getDomainTrust(domain: string): {
-  domain: string;
-  trust: number;
-  source: "custom" | "builtin" | "default";
-} {
-  const d = domain.replace(/^www\./u, "").toLowerCase();
-  if (customTrust.has(d))
-    return { domain: d, trust: customTrust.get(d)!, source: "custom" };
-  for (const [pattern, score] of Object.entries(DEFAULT_TRUST)) {
-    if (d.includes(pattern))
-      return { domain: d, trust: score, source: "builtin" };
-  }
-  if (d.endsWith(".gov") || d.endsWith(".edu"))
-    return { domain: d, trust: 0.9, source: "builtin" };
-  if (d.startsWith("docs.") || d.startsWith("developer."))
-    return { domain: d, trust: 0.85, source: "builtin" };
-  return { domain: d, trust: 0.5, source: "default" };
-}
+// #31: Source Trust Graph — now imported from ./trust.js ──────────────
 
 // #32: Memory Profiles — per-project preferences
 const memoryProfiles = new Map<
@@ -1878,10 +2219,24 @@ async function answerWithEvidence(question: string, limit = 3) {
     }
   }
   evidence.sort((a, b) => b.trust - a.trust);
+
+  // #5 Evidence Quality Gates: filter to trusted evidence only
+  const trustedEvidence = evidence.filter((e) => e.trust >= 0.7);
+  if (trustedEvidence.length === 0) {
+    return {
+      question,
+      error: "insufficient_evidence",
+      message: "No evidence met the trust threshold (>= 0.7). Please try a more specific query or different sources.",
+      _rejected_count: evidence.length,
+      evidence: [],
+      sources: [],
+    };
+  }
+
   return {
     question,
-    evidenceCount: evidence.length,
-    evidence: evidence.slice(0, 10),
+    evidenceCount: trustedEvidence.length,
+    evidence: trustedEvidence.slice(0, 10),
     sources: searchResult.results.map((r) => ({
       url: r.url,
       domain: r.source_domain,
@@ -1968,9 +2323,8 @@ async function detectConflicts(topic: string, limit = 5) {
           claim2: c2,
           reason: `Opposing statements about "${common
             .slice(0, 3)
-            .join(", ")}" — ${
-            c1.trust > c2.trust ? c1.source : c2.source
-          } is more trustworthy (trust: ${Math.max(c1.trust, c2.trust)})`,
+            .join(", ")}" — ${c1.trust > c2.trust ? c1.source : c2.source
+            } is more trustworthy (trust: ${Math.max(c1.trust, c2.trust)})`,
         });
     }
   }
@@ -2069,16 +2423,16 @@ async function upgradeImpactAnalyzer(
       breakingLines.length > 10
         ? "high"
         : breakingLines.length > 3
-        ? "medium"
-        : "low",
+          ? "medium"
+          : "low",
     breakingChanges: breakingLines.map((l) => l.trim().substring(0, 300)),
     sources: searchResult.results.map((r) => ({ url: r.url, title: r.title })),
     recommendation:
       breakingLines.length > 10
         ? "Major migration effort required. Read the full migration guide."
         : breakingLines.length > 3
-        ? "Some breaking changes detected. Test thoroughly."
-        : "Low risk upgrade. Standard testing should suffice.",
+          ? "Some breaking changes detected. Test thoroughly."
+          : "Low risk upgrade. Standard testing should suffice.",
   };
 }
 
@@ -2153,11 +2507,9 @@ function calibrateConfidence(
         else if (age < 365 * 86400000) score += 0.05;
       }
       score = Math.min(score + c.sourceTrust * 0.15, 0.99);
-      const reasoning = `${c.sourceCount} sources, ${
-        c.officialSources
-      } official, trust=${c.sourceTrust.toFixed(2)}${
-        c.recency ? `, date=${c.recency}` : ""
-      }`;
+      const reasoning = `${c.sourceCount} sources, ${c.officialSources
+        } official, trust=${c.sourceTrust.toFixed(2)}${c.recency ? `, date=${c.recency}` : ""
+        }`;
       return {
         text: c.text,
         confidence: Math.round(score * 100) / 100,
@@ -2174,21 +2526,24 @@ const watchActions = new Map<
     url: string;
     webhookUrl: string | undefined;
     label: string;
+    context: string | undefined;
     lastCheck: string | undefined;
   }
 >();
-function addWatch(url: string, label?: string, webhookUrl?: string) {
+function addWatch(url: string, label?: string, webhookUrl?: string, context?: string) {
   const id = randomUUID().substring(0, 8);
   watchActions.set(id, {
     url,
     webhookUrl,
     label: label ?? extractDomain(url),
+    context,
     lastCheck: undefined,
   });
   return {
     id,
     url,
     label: label ?? extractDomain(url),
+    context: context ?? "none",
     webhookUrl: webhookUrl ?? "none",
     status: "watching",
   };
@@ -2196,23 +2551,40 @@ function addWatch(url: string, label?: string, webhookUrl?: string) {
 async function checkWatch(id: string) {
   const watch = watchActions.get(id);
   if (!watch) throw new Error(`Watch ${id} not found`);
-  const changes = await detectChanges(watch.url, 20000);
+
+  // Hardened pipeline using semanticDiff if context exists
+  const changes = watch.context
+    ? await semanticDiff(watch.url, watch.context)
+    : await detectChanges(watch.url, 20000);
+
   watch.lastCheck = new Date().toISOString();
+
+  let webhookStatus = "not_configured";
+  let webhookError: string | undefined;
+
   if ((changes as any).status === "changed" && watch.webhookUrl) {
     try {
-      await fetch(watch.webhookUrl, {
+      const res = await fetch(watch.webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ watchId: id, ...changes }),
+        body: JSON.stringify({ watchId: id, label: watch.label, timestamp: watch.lastCheck, ...changes }),
       });
-    } catch {
-      /* best effort */
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+      webhookStatus = "delivered";
+    } catch (e: any) {
+      webhookStatus = "failed";
+      webhookError = e.message;
     }
   }
+
   return {
     watchId: id,
     ...changes,
-    webhookFired: (changes as any).status === "changed" && !!watch.webhookUrl,
+    webhookStatus,
+    webhookError,
+    webhookFired: webhookStatus === "delivered" || webhookStatus === "failed",
   };
 }
 
@@ -2224,33 +2596,33 @@ async function semanticDiff(url: string, context?: string) {
   const removed = (changes.diff?.removedContent ?? []) as string[];
   const contextKeywords = context
     ? context
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((w: string) => w.length > 3)
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w: string) => w.length > 3)
     : [];
   const meaningful = {
     relevantAdditions:
       contextKeywords.length > 0
         ? added.filter((l: string) =>
-            contextKeywords.some((k: string) => l.toLowerCase().includes(k))
-          )
+          contextKeywords.some((k: string) => l.toLowerCase().includes(k))
+        )
         : added.filter((l: string) => l.length > 30),
     relevantRemovals:
       contextKeywords.length > 0
         ? removed.filter((l: string) =>
-            contextKeywords.some((k: string) => l.toLowerCase().includes(k))
-          )
+          contextKeywords.some((k: string) => l.toLowerCase().includes(k))
+        )
         : removed.filter((l: string) => l.length > 30),
     impactLevel: "low" as string,
   };
   meaningful.impactLevel =
     meaningful.relevantAdditions.length > 5 ||
-    meaningful.relevantRemovals.length > 5
+      meaningful.relevantRemovals.length > 5
       ? "high"
       : meaningful.relevantAdditions.length > 0 ||
         meaningful.relevantRemovals.length > 0
-      ? "medium"
-      : "low";
+        ? "medium"
+        : "low";
   return {
     url,
     status: "analyzed",
@@ -2379,6 +2751,7 @@ const watchArgs = z.object({
   url: z.string().url(),
   label: z.string().optional(),
   webhookUrl: z.string().optional(),
+  context: z.string().optional(),
 });
 const checkWatchArgs = z.object({ id: z.string() });
 const semanticDiffArgs = z.object({
@@ -2422,6 +2795,13 @@ const researchArgs = z.object({
 });
 const researchJobGetArgs = z.object({ jobId: z.string() });
 const researchJobCancelArgs = z.object({ jobId: z.string() });
+const continuousResearchStartArgs = z.object({
+  query: z.string().min(1),
+  intervalMinutes: z.number().int().min(1).optional(),
+  webhookUrl: z.string().url().optional(),
+});
+const continuousResearchJobGetArgs = z.object({ jobId: z.string() });
+const continuousResearchJobCancelArgs = z.object({ jobId: z.string() });
 
 // ── TOOL DEFINITIONS ────────────────────────────────────────────────
 const TOOLS: any[] = [
@@ -2850,6 +3230,38 @@ const TOOLS: any[] = [
     },
   },
   {
+    name: "continuous_research_start",
+    description:
+      "Start a continuous research agent. It will repeatedly search context, diff pages, and optionally fire webhooks with findings.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        intervalMinutes: { type: "number", description: "Default 60" },
+        webhookUrl: { type: "string" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "continuous_research_status",
+    description: "Check the status and logs of a continuous research agent.",
+    inputSchema: {
+      type: "object",
+      properties: { jobId: { type: "string" } },
+      required: ["jobId"],
+    },
+  },
+  {
+    name: "continuous_research_cancel",
+    description: "Cancel a continuous research agent.",
+    inputSchema: {
+      type: "object",
+      properties: { jobId: { type: "string" } },
+      required: ["jobId"],
+    },
+  },
+  {
     name: "github_releases",
     description: "Fetch GitHub releases. Cached 30min.",
     inputSchema: {
@@ -3009,9 +3421,8 @@ async function getDynamicRecipeTools() {
       dynamicRecipeMap.set(toolName, r.id);
       return {
         name: toolName,
-        description: `Run Kryfto Plugin/Recipe: ${r.name}. ${
-          r.description ?? ""
-        }`,
+        description: `Run Kryfto Plugin/Recipe: ${r.name}. ${r.description ?? ""
+          }`,
         inputSchema: {
           type: "object",
           properties: {
@@ -3034,7 +3445,7 @@ async function getDynamicRecipeTools() {
 // ── Main Server ─────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const server = new Server(
-    { name: "kryfto-mcp-server", version: "3.0.0" },
+    { name: "kryfto-mcp-server", version: SERVER_VERSION },
     { capabilities: { tools: {} } }
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -3217,7 +3628,7 @@ async function main(): Promise<void> {
       }
       if (name === "watch_and_act") {
         const p = watchArgs.parse(args);
-        const r = addWatch(p.url, p.label, p.webhookUrl);
+        const r = addWatch(p.url, p.label, p.webhookUrl, p.context);
         return asText(r, {
           requestId,
           latencyMs: Date.now() - start,
@@ -3403,6 +3814,52 @@ async function main(): Promise<void> {
             requestId,
             latencyMs: Date.now() - start,
             tool: "research_job_cancel",
+          }
+        );
+      }
+      if (name === "continuous_research_start") {
+        const p = continuousResearchStartArgs.parse(args);
+        const r = startContinuousResearch(p.query, {
+          intervalMinutes: p.intervalMinutes,
+          webhookUrl: p.webhookUrl,
+        });
+        return asText(r, {
+          requestId,
+          latencyMs: Date.now() - start,
+          tool: "continuous_research_start",
+        });
+      }
+      if (name === "continuous_research_status") {
+        const p = continuousResearchJobGetArgs.parse(args);
+        const job = continuousResearchJobs.get(p.jobId);
+        if (!job)
+          return asError("not_found", `Job not found: ${p.jobId}`, {
+            requestId,
+          });
+        const { abort, ...safeJob } = job;
+        return asText(safeJob, {
+          requestId,
+          latencyMs: Date.now() - start,
+          tool: "continuous_research_status",
+        });
+      }
+      if (name === "continuous_research_cancel") {
+        const p = continuousResearchJobCancelArgs.parse(args);
+        const job = continuousResearchJobs.get(p.jobId);
+        if (!job)
+          return asError("not_found", `Job not found: ${p.jobId}`, {
+            requestId,
+          });
+        if (job.state === "running") {
+          job.abort.abort();
+          job.state = "cancelled";
+        }
+        return asText(
+          { jobId: p.jobId, state: job.state },
+          {
+            requestId,
+            latencyMs: Date.now() - start,
+            tool: "continuous_research_cancel",
           }
         );
       }

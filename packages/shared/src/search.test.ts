@@ -16,6 +16,8 @@ import {
   safeSearchToBing,
   safeSearchToBrave,
   safeSearchToGoogle,
+  resolveEngineRedirect,
+  unwrapTrackingUrls,
 } from "./search.js";
 
 describe("search helpers", () => {
@@ -125,7 +127,7 @@ describe("search helpers", () => {
     `;
     const parsed = parseGoogleHtmlSearchResults(html, 5);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.url).toBe("https://example.com");
+    expect(parsed[0]?.url).toBe("https://example.com/");
   });
 
   it("parses bing api payload", () => {
@@ -167,6 +169,67 @@ describe("search helpers", () => {
     `;
     const parsed = parseBraveHtmlSearchResults(html, 5);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.url).toBe("https://example.com");
+    expect(parsed[0]?.url).toBe("https://example.com/");
+  });
+});
+
+describe("resolveEngineRedirect", () => {
+  it("resolves DuckDuckGo uddg redirect", () => {
+    const url = "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage";
+    const result = resolveEngineRedirect(url);
+    expect(result).toContain("example.com/page");
+    expect(result).not.toContain("duckduckgo");
+  });
+
+  it("resolves Yahoo RU redirect", () => {
+    const url = "https://search.yahoo.com/r?RU=https%3A%2F%2Fexample.com%2Fdocs";
+    const result = resolveEngineRedirect(url);
+    expect(result).toContain("example.com/docs");
+    expect(result).not.toContain("yahoo");
+  });
+
+  it("resolves Bing /ck/a redirect with base64", () => {
+    const target = "https://example.com/test";
+    const encoded = "a1" + Buffer.from(target).toString("base64");
+    const url = `https://www.bing.com/ck/a?u=${encoded}`;
+    const result = resolveEngineRedirect(url);
+    expect(result).toContain("example.com/test");
+  });
+
+  it("resolves Google /url redirect", () => {
+    const url = "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fguide";
+    const result = resolveEngineRedirect(url);
+    expect(result).toContain("example.com/guide");
+    expect(result).not.toContain("google.com");
+  });
+
+  it("passes through normal URLs unchanged", () => {
+    const url = "https://react.dev/docs/hooks";
+    expect(resolveEngineRedirect(url)).toBe("https://react.dev/docs/hooks");
+  });
+
+  it("handles empty/null input", () => {
+    expect(resolveEngineRedirect("")).toBe("");
+  });
+});
+
+describe("unwrapTrackingUrls", () => {
+  it("removes utm_ params", () => {
+    const url = "https://example.com/page?utm_source=test&utm_medium=email&real=1";
+    const result = unwrapTrackingUrls(url);
+    expect(result).not.toContain("utm_source");
+    expect(result).not.toContain("utm_medium");
+    expect(result).toContain("real=1");
+  });
+
+  it("removes fbclid", () => {
+    const url = "https://example.com/page?fbclid=abc123";
+    const result = unwrapTrackingUrls(url);
+    expect(result).not.toContain("fbclid");
+  });
+
+  it("passes through clean URLs", () => {
+    const url = "https://example.com/docs";
+    expect(unwrapTrackingUrls(url)).toBe("https://example.com/docs");
   });
 });

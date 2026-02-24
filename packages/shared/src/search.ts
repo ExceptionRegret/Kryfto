@@ -30,11 +30,11 @@ function normalizeDuckDuckGoResultUrl(rawHref: string): string {
     const withBase = new URL(rawHref, "https://duckduckgo.com");
     const redirected = withBase.searchParams.get("uddg");
     if (redirected) {
-      return maybeDecodeURIComponent(redirected);
+      return unwrapTrackingUrls(maybeDecodeURIComponent(redirected));
     }
-    return withBase.toString();
+    return unwrapTrackingUrls(withBase.toString());
   } catch {
-    return rawHref;
+    return unwrapTrackingUrls(rawHref);
   }
 }
 
@@ -44,21 +44,61 @@ function normalizeYahooResultUrl(rawHref: string): string {
     const withBase = new URL(rawHref, "https://search.yahoo.com");
     const redirected = withBase.searchParams.get("RU");
     if (redirected) {
-      return maybeDecodeURIComponent(redirected);
+      return unwrapTrackingUrls(maybeDecodeURIComponent(redirected));
     }
-    return withBase.toString();
+    return unwrapTrackingUrls(withBase.toString());
   } catch {
-    return rawHref;
+    return unwrapTrackingUrls(rawHref);
   }
+}
+
+export function unwrapTrackingUrls(rawHref: string): string {
+  if (!rawHref) return rawHref;
+  let url = rawHref;
+
+  try {
+    const udUrl = new URL(url);
+    if (udUrl.hostname.includes("urldefense.")) {
+      const match = url.match(/__([^_]+)__/);
+      if (match && match[1]) {
+        url = maybeDecodeURIComponent(match[1]);
+      }
+    }
+
+    const parsed = new URL(url);
+    const toRemove = Array.from(parsed.searchParams.keys()).filter(k =>
+      k.startsWith("utm_") ||
+      k === "gclid" ||
+      k === "fbclid" ||
+      k === "msclkid" ||
+      k === "mc_eid"
+    );
+    toRemove.forEach(k => parsed.searchParams.delete(k));
+    url = parsed.toString();
+  } catch { }
+
+  return url;
 }
 
 function normalizeBingResultUrl(rawHref: string): string {
   if (!rawHref) return rawHref;
+  let url = rawHref;
   try {
-    return new URL(rawHref, "https://www.bing.com").toString();
+    url = new URL(rawHref, "https://www.bing.com").toString();
+    const parsed = new URL(url);
+    if (parsed.pathname.startsWith("/ck/a")) {
+      const u = parsed.searchParams.get("u");
+      if (u && u.startsWith("a1")) {
+        const decoded = Buffer.from(u.substring(2), "base64").toString("utf8");
+        if (decoded.startsWith("http")) {
+          url = decoded;
+        }
+      }
+    }
   } catch {
-    return rawHref;
+    url = rawHref;
   }
+  return unwrapTrackingUrls(url);
 }
 
 function toLocaleParts(locale: string): {
@@ -164,6 +204,11 @@ export function buildGoogleHtmlSearchUrl(params: {
   url.searchParams.set("gl", localeParts.region);
   url.searchParams.set("safe", safeSearchToGoogle(params.safeSearch));
   url.searchParams.set("gbv", "1");
+  // #11: Anti-bot hardening — disable auto-correction, request 10 results,
+  // request basic HTML mode to reduce JS-rendered pages
+  url.searchParams.set("nfpr", "1");
+  url.searchParams.set("num", "10");
+  url.searchParams.set("filter", "0");
   return url.toString();
 }
 
@@ -188,12 +233,17 @@ function normalizeGoogleResultUrl(rawHref: string): string {
     const withBase = new URL(rawHref, "https://www.google.com");
     const redirected = withBase.searchParams.get("q");
     if (withBase.pathname === "/url" && redirected) {
-      return redirected;
+      return unwrapTrackingUrls(redirected);
     }
-    return withBase.toString();
+    return unwrapTrackingUrls(withBase.toString());
   } catch {
-    return rawHref;
+    return unwrapTrackingUrls(rawHref);
   }
+}
+
+function normalizeBraveResultUrl(rawHref: string): string {
+  if (!rawHref) return rawHref;
+  return unwrapTrackingUrls(rawHref);
 }
 
 export function parseDuckDuckGoSearchResults(
@@ -301,73 +351,65 @@ export function parseGoogleHtmlSearchResults(
 ): ParsedSearchResult[] {
   const $ = load(html);
   const results: ParsedSearchResult[] = [];
+  const seen = new Set<string>();
 
-  // Method 1: Target generalized result blocks in mobile/fallback HTML
-  $("div > a:has(h3)").each((_index, element) => {
-    if (results.length >= limit) {
-      return false;
-    }
-
-    const anchor = $(element);
-    const title = anchor.find("h3").first().text().trim();
-    const href = anchor.attr("href")?.trim() ?? "";
-
-    if (!title || !href) {
-      return;
-    }
-
+  function pushGoogle(title: string, href: string, snippet?: string): boolean {
+    if (results.length >= limit) return false;
+    if (!title || !href) return true;
     const normalizedUrl = normalizeGoogleResultUrl(href);
-    if (!normalizedUrl.startsWith("http")) {
-      return;
-    }
-
-    if (normalizedUrl.includes("google.com/")) {
-      return;
-    }
-
-    // Try to find accompanying text snippets nearby (highly variable)
-    const snippetNode = anchor.parent().next("div");
-    const snippet = snippetNode.text().trim() || undefined;
-
-    // Deduplicate on URL
-    if (results.some((r) => r.url === normalizedUrl)) {
-      return;
-    }
-
+    if (!normalizedUrl.startsWith("http")) return true;
+    if (normalizedUrl.includes("google.com/")) return true;
+    if (seen.has(normalizedUrl)) return true;
+    seen.add(normalizedUrl);
     results.push({
       title,
       url: normalizedUrl,
       ...(snippet ? { snippet } : {}),
       rank: results.length + 1,
     });
-  });
-
-  if (results.length > 0) {
-    return results;
+    return true;
   }
 
-  $("a h3").each((_index, heading) => {
-    if (results.length >= limit) {
-      return false;
-    }
+  // Method 1: Target generalized result blocks in mobile/fallback HTML
+  $("div > a:has(h3)").each((_index, element) => {
+    if (results.length >= limit) return false;
+    const anchor = $(element);
+    const title = anchor.find("h3").first().text().trim();
+    const href = anchor.attr("href")?.trim() ?? "";
+    const snippetNode = anchor.parent().next("div");
+    const snippet = snippetNode.text().trim() || undefined;
+    pushGoogle(title, href, snippet);
+  });
+  if (results.length > 0) return results;
 
+  // Method 2: h3 inside anchor tags (standard desktop layout)
+  $("a h3").each((_index, heading) => {
+    if (results.length >= limit) return false;
     const anchor = $(heading).closest("a");
     const title = $(heading).text().trim();
     const href = anchor.attr("href")?.trim() ?? "";
-    if (!title || !href) return;
+    pushGoogle(title, href);
+  });
+  if (results.length > 0) return results;
 
-    const normalizedUrl = normalizeGoogleResultUrl(href);
-    if (
-      !normalizedUrl.startsWith("http") ||
-      normalizedUrl.includes("google.com/")
-    )
-      return;
-
-    results.push({
-      title,
-      url: normalizedUrl,
-      rank: results.length + 1,
-    });
+  // #11 Method 3: Fallback — data-href or cite-based extraction for
+  // Google's JS-heavy pages that render minimal HTML server-side
+  $("div.g, div[data-hveid]").each((_index, element) => {
+    if (results.length >= limit) return false;
+    const el = $(element);
+    const anchor = el.find("a[href]").first();
+    const title =
+      el.find("h3").first().text().trim() ||
+      anchor.text().trim();
+    const href =
+      anchor.attr("href")?.trim() ??
+      el.find("cite").first().text().trim() ??
+      "";
+    const snippet =
+      el.find("span.st, div.IsZvec, div[data-sncf]").first().text().trim() ||
+      el.find("div > span").first().text().trim() ||
+      undefined;
+    pushGoogle(title, href, snippet);
   });
 
   return results;
@@ -384,12 +426,13 @@ export function parseBraveHtmlSearchResults(
   const pushResult = (title: string, href: string, snippet?: string): void => {
     if (results.length >= limit) return;
     if (!title || !href) return;
-    if (!href.startsWith("http")) return;
-    if (seen.has(href)) return;
-    seen.add(href);
+    const normalized = normalizeBraveResultUrl(href);
+    if (!normalized.startsWith("http")) return;
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
     results.push({
       title,
-      url: href,
+      url: normalized,
       ...(snippet ? { snippet } : {}),
       rank: results.length + 1,
     });
@@ -510,4 +553,45 @@ export function localeParts(locale: string): {
   mkt: string;
 } {
   return toLocaleParts(locale);
+}
+
+/**
+ * Resolve engine wrapper/redirect URLs to their final destination.
+ * Detects Bing, Yahoo, DuckDuckGo, Google, and Brave redirect patterns
+ * and delegates to the appropriate normalizer.
+ */
+export function resolveEngineRedirect(url: string): string {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./u, "").toLowerCase();
+
+    // Bing redirect: /ck/a path with base64 encoded URL
+    if (host.includes("bing.com") && parsed.pathname.startsWith("/ck/a")) {
+      return normalizeBingResultUrl(url);
+    }
+
+    // Yahoo redirect: RU param
+    if (host.includes("yahoo.com") && parsed.searchParams.has("RU")) {
+      return normalizeYahooResultUrl(url);
+    }
+
+    // DuckDuckGo redirect: uddg param
+    if (
+      host.includes("duckduckgo.com") &&
+      parsed.searchParams.has("uddg")
+    ) {
+      return normalizeDuckDuckGoResultUrl(url);
+    }
+
+    // Google redirect: /url path with q param
+    if (host.includes("google.com") && parsed.pathname === "/url") {
+      return normalizeGoogleResultUrl(url);
+    }
+
+    // Otherwise just unwrap tracking params
+    return unwrapTrackingUrls(url);
+  } catch {
+    return unwrapTrackingUrls(url);
+  }
 }

@@ -13,12 +13,16 @@
     "test:unit": "pnpm -r test",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "node scripts/e2e-runner.mjs",
+    "test:eval": "node scripts/run-eval.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
+    "version:check": "node scripts/check-version.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.11",
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "vitest": "^2.1.4"
   },
   "pnpm": {

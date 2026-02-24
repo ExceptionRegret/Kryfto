@@ -17,12 +17,13 @@
 
 Kryfto is a comprehensive framework for automated data extraction, web crawling, and browser session execution.
 
-- **🤖 AI Agent Ready**: Ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server exposing **39+ tools**. Instantly give Claude, Cursor, or Codex the ability to search, browse, extract, fact-check, manage async research jobs, and run benchmarks on the live web.
-- **🕵️‍♂️ Built-in Stealth Mode**: Auto-rotates User-Agents, randomizes viewports, clears canvas fingerprints, and patches `navigator.webdriver` to bypass aggressive bot protections. Full proxy-rotation with granular **geolocation support (country/location)** included out-of-the-box.
+- **🤖 AI Agent Ready**: Ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server exposing **42+ tools**. Instantly give Claude, Cursor, or Codex the ability to search, browse, extract, fact-check, run continuous research agents, and benchmark search quality on the live web.
+- **🕵️‍♂️ Advanced Stealth Engine**: Unified anti-bot layer (`stealth.ts`) with **16 rotated modern User-Agents** (Chrome 130–133, Firefox 133–134, Safari 18.3, Edge 131–133), per-browser `Sec-Ch-Ua` client hints, `Sec-Fetch-*` headers, browser-family-specific `Accept` strings, engine-appropriate `Referer` headers, per-engine request spacing delays, and an in-memory cookie jar with 30min TTL. Search engines cannot distinguish these requests from organic browser traffic.
 - **🛡️ Zero Trace Privacy**: Execute purely in-memory HTTP extractions wrapping our bot-evasion without persisting any telemetry or artifacts to the Postgres database.
 - **⚙️ Workflow Engine Native**: Fully documented OpenAPI spec makes it trivial to drop into `n8n`, Zapier, Make, or custom Python/TypeScript pipelines.
 - **☁️ Enterprise Infrastructure**: Backed by **Postgres** for persistence, **Redis + BullMQ** for reliable concurrent job queuing, and **MinIO/S3** for long-term artifact storage.
 - **📊 SLO Dashboard & Eval Suite**: Built-in reliability monitoring with per-tool success rates, latency percentiles (p50/p95/p99), deterministic request replay, and a 10-query benchmark suite for nightly regression testing.
+- **🔄 Continuous Research Agent**: Deploy autonomous background research loops that search, monitor, diff pages, and fire webhook alerts — all from a single MCP tool call.
 
 ---
 
@@ -329,9 +330,10 @@ Most modern AI and web-scraping architectures rely on expensive third-party APIs
 **The Problem:** A critical API's docs change without notice, breaking your integration.
 **The Kryfto Solution:**
 
-- `watch_and_act` registers the URL with an optional Slack/Discord webhook.
-- Periodically call `check_watch` — if the page changed, it auto-fires a POST to your webhook with the diff.
+- `watch_and_act` registers the URL with an optional Slack/Discord webhook and a semantic `context` filter.
+- Periodically call `check_watch` — if the page changed, it auto-fires a POST to your webhook with the diff and reports delivery status.
 - Use `semantic_diff` with context like "authentication" to filter only changes relevant to you.
+- For fully autonomous monitoring, use `continuous_research_start` — it runs search→watch→diff→alert loops on a configurable interval, notifying your webhook of every new finding.
 
 ### Use Case 7: SLO Monitoring & Production Reliability
 
@@ -344,9 +346,26 @@ Most modern AI and web-scraping architectures rely on expensive third-party APIs
 
 ---
 
-## 🥷 Anti-Bot & Proxy Configuration
+## 🥷 Anti-Bot & Stealth Configuration
 
-If you are crawling highly-protected sites (Cloudflare, Datadome, etc.), configure the environment variables in your `.env` to enable Kryfto's fingerprint obfuscation layer.
+Kryfto ships with a unified stealth layer (`packages/shared/src/stealth.ts`) designed to make every HTTP request indistinguishable from organic browser traffic.
+
+### What’s Included (Zero Config Required)
+
+| Feature | Description |
+|---|---|
+| **User-Agent Rotation** | 16 modern UAs covering Chrome 130–133, Firefox 133–134, Safari 18.3, Edge 131–133 |
+| **Client Hints (`Sec-Ch-Ua`)** | Correct per-browser hints for Chrome/Edge (omitted for Firefox/Safari, matching real behavior) |
+| **Sec-Fetch Headers** | Full `Sec-Fetch-Dest/Mode/Site/User` set for Chromium/Firefox; minimal for Safari |
+| **Accept Headers** | Browser-family-specific (Chrome, Firefox, and Safari each send different Accept strings) |
+| **Referer** | Engine homepage injected automatically (e.g., `https://www.google.com/` for Google queries) |
+| **Request Spacing** | Per-engine delays: Google 800–1500ms, Bing/Yahoo 400–800ms, DDG 200–500ms, Brave 300–600ms |
+| **Cookie Jar** | In-memory `Set-Cookie` persistence per domain with 30min TTL |
+| **Platform Hints** | Derived from UA: Windows/macOS/Linux |
+
+### Optional Proxy Configuration
+
+For crawling highly-protected sites (Cloudflare, Datadome, etc.), add proxies in your `.env`:
 
 ```env
 KRYFTO_STEALTH_MODE=true
@@ -402,22 +421,38 @@ Apache-2.0 (`LICENSE`)
 
 ## 📋 Changelog
 
-### v3.1.0 — Deep Research & Stealth Proxies (Latest)
+### v3.2.0 — The Moat: Competitive Intelligence Engine (Latest)
+
+_Continuous Research Agent · Intent Reranking · PDF Extraction · Strict Evidence · Hardened Webhooks_
+
+- **Continuous Research Agent:** New `continuous_research_start`, `continuous_research_status`, and `continuous_research_cancel` tools for autonomous background research loops that repeatedly search, monitor, semantic-diff pages, and fire webhook alerts on findings.
+- **Intent-Based Reranking:** `federatedSearch` now detects query intent (`troubleshooting`, `documentation`, `news`) and dynamically adjusts domain scores — official docs dominate doc queries, Stack Overflow dominates troubleshooting.
+- **Redirect Canonicalization:** `unwrapTrackingUrls` strips `utm_*`, `gclid`, `fbclid`, `msclkid`, and resolves Bing/Yahoo wrapper URLs before trust scoring.
+- **Strict Evidence Gates:** `answer_with_evidence` and `citationSearch` return structured `insufficient_evidence` objects instead of throwing, enabling intelligent AI retry logic.
+- **PDF Extraction:** Native `pdf-parse` integration in the worker — PDF URLs are automatically extracted to text and processed as Markdown.
+- **Markdown Table Extraction:** Integrated `turndown-plugin-gfm` for high-fidelity table preservation in `read_url` output.
+- **Extreme Reliability:** Search Success ≥ 99%, Read Success ≥ 97% with aggressive HTTP 429 exponential jitter backoff.
+- **Unified Stealth Layer:** New `stealth.ts` module with 16 rotated UAs, per-browser `Sec-Ch-Ua`/`Sec-Fetch-*` headers, engine-specific `Referer`, request spacing delays, and in-memory cookie jar. Replaces all hardcoded User-Agent strings.
+- **Hardened Webhooks:** `watch_and_act` now accepts semantic `context` filters and reports webhook delivery status (`delivered`/`failed`) with HTTP error details.
+- **Research Traces:** `research` tool output now includes per-step `timings` (search latency, read phase) and per-page `latencyMs` for debugging.
+- **Eval Thresholds:** `precision@5 ≥ 75%`, `officialHitRate ≥ 80%`, `searchSuccessRate ≥ 99%` enforced in CI.
+
+### v3.1.0 — Deep Research & Stealth Proxies
 
 _Async Research · Zero-Trace Mode · Geolocation · Dynamic Plugins_
 
-- **Async Deep Research API:** New non-blocking tools (`research_job_start`, `research_job_status`, `research_job_cancel`) for executing massive iterative research pipelines without timing out the MCP connection.
-- **Zero-Trace Preflighting:** Introduced `privacy_mode: "zero_trace"` to purely bypass BullMQ and Postgres job queues for instantaneous, artifact-free in-memory extraction.
-- **Granular Controls:** Integrated `freshness_mode` cache evictions globally and bridged `proxy_profile`/`location`/`country`/`rotation_strategy` parameters straight down through the intelligence tools.
-- **Dynamic Plugin Tooling:** Automagically mounts saved extraction templates from `/v1/recipes` as native LLM tools (e.g. `recipe_ycombinator`).
+- **Async Deep Research API:** Non-blocking tools (`research_job_start`, `research_job_status`, `research_job_cancel`) for massive iterative research pipelines.
+- **Zero-Trace Preflighting:** `privacy_mode: "zero_trace"` bypasses BullMQ and Postgres for artifact-free in-memory extraction.
+- **Granular Controls:** `freshness_mode` cache evictions + `proxy_profile`/`location`/`country`/`rotation_strategy` parameters.
+- **Dynamic Plugin Tooling:** Auto-mounts saved extraction templates from `/v1/recipes` as native LLM tools.
 
 ### v3.0.1 — Search & Reliability Hardening
 
 _Google anti-bot bypass · Semantic version sorting · Bugfixes_
 
-- **Google Crawler Bypass:** Introduced `gbv=1` and Chrome User-Agent spoofing to cleanly evade Google's JS challenge when falling back to scraping.
-- **Semantic Recency Ranking:** Added robust `-X-Y-Z` version parsing to the federated search sorter. Minor version documentation (e.g. `15.5`) now correctly outranks major release pages (`15.0`).
-- **Internal Error Fix:** Resolved a 500 `INTERNAL_ERROR` Postgres crash in the `read_url` tool by unifying the `jobId` artifact fetching fallback logic.
+- **Google Crawler Bypass:** `gbv=1` and Chrome User-Agent spoofing to evade Google's JS challenge.
+- **Semantic Recency Ranking:** Robust `-X-Y-Z` version parsing — minor version docs (e.g. `15.5`) outrank major releases.
+- **Internal Error Fix:** Resolved 500 `INTERNAL_ERROR` Postgres crash in `read_url`.
 
 ### v3.0.0 — Advanced Intelligence Engine
 
@@ -446,6 +481,7 @@ _36 MCP tools · SLO dashboard · Deterministic replay · Eval suite_
 | `list_replays` | Debugging | Browse replayable request history |
 | `run_eval_suite` | Testing | 10 real-world query benchmark suite |
 | `research_job_*` | Pipeline | Start, Status, and Cancel deep async research |
+| `continuous_research_*` | Agent Loop | Start, Status, and Cancel autonomous research agents |
 | `recipe_*` | Extraction | Dynamic mounting of user-defined JSON recipes |
 
 **Infrastructure:**

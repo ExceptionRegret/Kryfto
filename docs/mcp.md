@@ -1,6 +1,6 @@
 # MCP Integration
 
-The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryfto's REST API and built-in intelligence engine. **39+ tools** are available across 8 categories, including dynamic recipe plugins.
+The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryfto's REST API and built-in intelligence engine. **42+ tools** are available across 9 categories, including dynamic recipe plugins and autonomous research agents.
 
 ## Environment Variables
 
@@ -16,7 +16,7 @@ The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryf
 | `KRYFTO_DOMAIN_BLOCKLIST`        | Comma-separated blocked domains             | —                         |
 | `KRYFTO_DOMAIN_ALLOWLIST`        | Comma-separated allowed domains             | —                         |
 
-## Tools (39+ total)
+## Tools (42+ total)
 
 ### 🔍 Search & Read (5 tools)
 
@@ -30,18 +30,26 @@ The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryf
 
 ### 🧠 Intelligence (7 tools)
 
-| Tool                     | Description                                                                 |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `answer_with_evidence`   | Search + read + extract evidence spans per claim with trust scores          |
-| `conflict_detector`      | Detect contradictions across multiple sources, rank by trustworthiness      |
-| `confidence_calibration` | Calibrated per-claim confidence based on source count, recency, trust       |
-| `upgrade_impact`         | Framework migration risk analysis (low/medium/high)                         |
-| `dev_intel`              | Developer intelligence — auto-search + read for framework updates           |
-| `query_planner`          | Preview search/read/extract plan with deterministic cost estimates          |
-| `research`               | Unified search→read→extract pipeline in one call with clean markdown output |
-| `research_job_start`     | Start an asynchronous research job for deep, multi-stage data gathering     |
-| `research_job_status`    | Check status, stream logs, and retrieve results of an async research job    |
-| `research_job_cancel`    | Cancel a running async research job                                         |
+| Tool                     | Description                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `answer_with_evidence`   | Search + read + extract evidence spans per claim with trust scores. Returns `insufficient_evidence` on failure |
+| `conflict_detector`      | Detect contradictions across multiple sources, rank by trustworthiness                                    |
+| `confidence_calibration` | Calibrated per-claim confidence based on source count, recency, trust                                    |
+| `upgrade_impact`         | Framework migration risk analysis (low/medium/high)                                                      |
+| `dev_intel`              | Developer intelligence — auto-search + read for framework updates                                        |
+| `query_planner`          | Preview search/read/extract plan with deterministic cost estimates                                        |
+| `research`               | Unified search→read→extract pipeline in one call with per-step `timings` and clean markdown output       |
+
+### 🔄 Agent Loops (6 tools)
+
+| Tool                            | Description                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------- |
+| `research_job_start`            | Start an asynchronous research job for deep, multi-stage data gathering                     |
+| `research_job_status`           | Check status, stream logs, and retrieve results of an async research job                    |
+| `research_job_cancel`           | Cancel a running async research job                                                         |
+| `continuous_research_start`     | Start an autonomous research agent loop (search→watch→diff→alert on configurable interval)  |
+| `continuous_research_status`    | Check status and progress logs of a continuous research agent                               |
+| `continuous_research_cancel`    | Cancel a running continuous research agent                                                  |
 
 ### 🔒 Trust & Memory (4 tools)
 
@@ -54,13 +62,13 @@ The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryf
 
 ### 📡 Monitoring (5 tools)
 
-| Tool            | Description                                                            |
-| --------------- | ---------------------------------------------------------------------- |
-| `add_monitor`   | Register URL to watch for changes                                      |
-| `list_monitors` | List all registered monitors                                           |
-| `watch_and_act` | Monitor URL + optional webhook (auto-fires POST on changes)            |
-| `check_watch`   | Check a watched URL now, fires webhook if changed                      |
-| `semantic_diff` | Context-filtered meaningful diff ("what changed that matters for me?") |
+| Tool            | Description                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------- |
+| `add_monitor`   | Register URL to watch for changes                                                                        |
+| `list_monitors` | List all registered monitors                                                                             |
+| `watch_and_act` | Monitor URL + optional webhook + semantic `context` filter. Reports delivery status (`delivered`/`failed`) |
+| `check_watch`   | Check a watched URL now, fires webhook if changed. Uses `semanticDiff` when context is provided          |
+| `semantic_diff` | Context-filtered meaningful diff ("what changed that matters for me?")                                   |
 
 ### 📊 Observability (5 tools)
 
@@ -99,6 +107,17 @@ The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryf
 | `fetch_artifact` | Download raw artifact bytes (base64) |
 
 Search engines supported: `duckduckgo`, `bing`, `yahoo`, `google`, `brave`
+
+## Quality & Reliability (v3.2.0)
+
+The MCP server enforces production-grade search quality:
+
+- **Intent Reranking:** Queries are auto-classified as `troubleshooting`, `documentation`, or `news` — domain scores shift dynamically.
+- **Redirect Canonicalization:** Bing/Yahoo wrapper URLs and tracking parameters (`utm_*`, `gclid`, `fbclid`) are stripped before ranking.
+- **Strict Evidence:** `answer_with_evidence`/`cite` return `insufficient_evidence` if no high-trust spans are found.
+- **Eval Thresholds:** `precision@5 ≥ 75%`, `officialHitRate ≥ 80%`, `searchSuccessRate ≥ 99%` enforced in CI via `pnpm test:eval`.
+- **PDF + Tables:** Native PDF text extraction and Markdown table fidelity via `turndown-plugin-gfm`.
+- **Unified Stealth:** All engine requests use `stealth.ts` — 16 rotated UAs, per-browser `Sec-Ch-Ua`/`Sec-Fetch-*` headers, engine-specific `Referer` and request spacing, in-memory cookie jar.
 
 ## Build and Run
 

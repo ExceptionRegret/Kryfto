@@ -46,6 +46,11 @@ import {
   resolveRepoPath,
   type AuthContext,
   type Recipe,
+  getStealthHeaders,
+  getStealthJsonHeaders,
+  getRandomUA,
+  engineDelay,
+  SimpleCookieJar,
 } from "@kryfto/shared";
 import { parseBearerToken, requireRole } from "./auth-rbac.js";
 import {
@@ -1013,23 +1018,29 @@ app.post("/v1/search", async (req, reply) => {
     process.env.KRYFTO_SEARCH_TIMEOUT_MS ?? 20_000
   );
 
-  const fetchHtml = async (url: string): Promise<string> => {
+  const cookieJar = new SimpleCookieJar();
+
+  const fetchHtml = async (url: string, engine?: string): Promise<string> => {
     await assertSafeUrl(url, { blockPrivateRanges, allowHosts });
+    if (engine) await engineDelay(engine);
+    const ua = getRandomUA();
+    const stealthHeaders = getStealthHeaders(engine ?? "unknown", ua);
+    // Merge cookies from jar
+    const hostname = new URL(url).hostname;
+    const cookie = cookieJar.get(hostname);
+    if (cookie) stealthHeaders["Cookie"] = cookie;
+
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
+      headers: stealthHeaders,
       signal: AbortSignal.timeout(searchTimeoutMs),
     });
 
     if (!response.ok) {
       throw new Error(`upstream status=${response.status}`);
     }
+    // Persist cookies from response
+    cookieJar.extractFromResponse(hostname, response);
     return response.text();
   };
 
@@ -1038,15 +1049,10 @@ app.post("/v1/search", async (req, reply) => {
     headers?: Record<string, string>
   ): Promise<unknown> => {
     await assertSafeUrl(url, { blockPrivateRanges, allowHosts });
+    const ua = getRandomUA();
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        Accept: "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-        ...(headers ?? {}),
-      },
+      headers: getStealthJsonHeaders(ua, headers),
       signal: AbortSignal.timeout(searchTimeoutMs),
     });
 
@@ -1072,7 +1078,7 @@ app.post("/v1/search", async (req, reply) => {
           locale: parsed.data.locale,
         });
         results = parseDuckDuckGoSearchResults(
-          await fetchHtml(searchUrl),
+          await fetchHtml(searchUrl, "duckduckgo"),
           parsed.data.limit
         );
         break;
@@ -1084,7 +1090,7 @@ app.post("/v1/search", async (req, reply) => {
           locale: parsed.data.locale,
         });
         results = parseYahooSearchResults(
-          await fetchHtml(searchUrl),
+          await fetchHtml(searchUrl, "yahoo"),
           parsed.data.limit
         );
         break;
@@ -1115,7 +1121,7 @@ app.post("/v1/search", async (req, reply) => {
               locale: parsed.data.locale,
             });
             results = parseBingHtmlSearchResults(
-              await fetchHtml(searchUrl),
+              await fetchHtml(searchUrl, "bing"),
               parsed.data.limit
             );
           }
@@ -1126,7 +1132,7 @@ app.post("/v1/search", async (req, reply) => {
             locale: parsed.data.locale,
           });
           results = parseBingHtmlSearchResults(
-            await fetchHtml(searchUrl),
+            await fetchHtml(searchUrl, "bing"),
             parsed.data.limit
           );
         }
@@ -1166,7 +1172,7 @@ app.post("/v1/search", async (req, reply) => {
           locale: parsed.data.locale,
         });
         results = parseGoogleHtmlSearchResults(
-          await fetchHtml(searchUrl),
+          await fetchHtml(searchUrl, "google"),
           parsed.data.limit
         );
         break;
@@ -1205,7 +1211,7 @@ app.post("/v1/search", async (req, reply) => {
           locale: parsed.data.locale,
         });
         results = parseBraveHtmlSearchResults(
-          await fetchHtml(searchUrl),
+          await fetchHtml(searchUrl, "brave"),
           parsed.data.limit
         );
         break;

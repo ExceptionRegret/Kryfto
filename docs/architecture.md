@@ -11,7 +11,8 @@ The runtime is a Dockerized control-plane + worker system for deterministic data
 - `redis`: queue transport and worker concurrency semaphores.
 - `postgres`: runtime state, artifacts metadata, idempotency keys, crawl graph, recipes, audit logs.
 - `minio` (default): S3-compatible artifact blob store.
-- `packages/mcp-server`: MCP tool adapter over the REST API.
+- `packages/mcp-server`: MCP tool adapter (42+ tools) over the REST API, including federated search, evidence-based research, continuous research agents, trust scoring, SLO monitoring, and deterministic replay.
+- `packages/shared`: Shared search parsers, URL utilities, stealth anti-bot layer (`stealth.ts` — 16 rotated UAs, `Sec-Ch-Ua` hints, engine-specific request spacing, cookie jar).
 - `packages/cli`, `packages/sdk-ts`, `packages/sdk-py`: client interfaces.
 
 ## Data Flow

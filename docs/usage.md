@@ -138,6 +138,15 @@ export GOOGLE_CSE_CX=...
 export BRAVE_SEARCH_API_KEY=...
 ```
 
+### Stealth Layer
+
+All search engines automatically use the unified stealth layer (`packages/shared/src/stealth.ts`). No configuration needed — every request gets:
+
+- Rotated User-Agents (16 modern browsers: Chrome, Firefox, Safari, Edge)
+- Per-browser `Sec-Ch-Ua` client hints and `Sec-Fetch-*` headers
+- Engine-specific `Referer` headers and request spacing delays
+- In-memory cookie jar with 30min TTL per domain
+
 ## 5) Browser Steps DSL
 
 Supported step types:
@@ -315,15 +324,17 @@ pnpm --filter @kryfto/mcp-server build
 API_BASE_URL=http://localhost:8080 API_TOKEN=$KRYFTO_API_TOKEN node packages/mcp-server/dist/index.js
 ```
 
-Tools exposed:
+Tools exposed (42+ total, see [MCP docs](mcp.md) for full reference):
 
-- `browse`
-- `crawl`
-- `extract`
-- `search`
-- `get_job`
-- `list_artifacts`
-- `fetch_artifact`
+**Search & Read:** `search`, `read_url`, `read_urls`, `detect_changes`, `cite`
+**Intelligence:** `answer_with_evidence`, `conflict_detector`, `confidence_calibration`, `upgrade_impact`, `dev_intel`, `query_planner`, `research`
+**Agent Loops:** `research_job_start/status/cancel`, `continuous_research_start/status/cancel`
+**Trust & Memory:** `source_trust`, `set_source_trust`, `set_memory_profile`, `get_memory_profile`
+**Monitoring:** `add_monitor`, `list_monitors`, `watch_and_act`, `check_watch`, `semantic_diff`
+**Observability:** `slo_dashboard`, `replay_request`, `list_replays`, `evaluation_harness`, `run_eval_suite`, `truth_maintenance`
+**GitHub:** `github_releases`, `github_diff`, `github_issues`
+**Browser & Crawl:** `browse`, `crawl`, `extract`, `recipe_*`
+**Jobs:** `get_job`, `list_artifacts`, `fetch_artifact`
 
 Claude Code / Codex config example is in `docs/mcp.md`.
 

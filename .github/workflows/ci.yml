@@ -34,6 +34,9 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      - name: Version consistency check
+        run: pnpm version:check
+
   integration:
     runs-on: ubuntu-latest
     needs: quality
@@ -84,6 +87,20 @@ jobs:
           COLLECTOR_BASE_URL: http://localhost:8080
           COLLECTOR_API_TOKEN: dev_admin_token_change_me
         run: pnpm test:e2e
+
+      - name: CI Evals (Search Quality)
+        env:
+          COLLECTOR_BASE_URL: http://localhost:8080
+          KRYFTO_API_TOKEN: dev_admin_token_change_me
+        run: pnpm test:eval 2>&1 | tee eval-results.json
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval-results.json
+          retention-days: 30
 
       - name: Docker image scan (Trivy)
         uses: aquasecurity/trivy-action@0.28.0

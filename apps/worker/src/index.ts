@@ -14,6 +14,8 @@ import { Redis } from "ioredis";
 import { minimatch } from "minimatch";
 import { trace } from "@opentelemetry/api";
 import pino from "pino";
+// @ts-ignore
+import pdfParse from "pdf-parse";
 import {
   chromium,
   firefox,
@@ -133,7 +135,7 @@ function profileKey(): Buffer {
   return createHash("sha256")
     .update(
       process.env.KRYFTO_PROFILE_ENCRYPTION_KEY ??
-        "collector-profile-key-change-me"
+      "collector-profile-key-change-me"
     )
     .digest();
 }
@@ -607,6 +609,22 @@ async function runFetch(
   }
 
   const response = await undiciFetch(target, fetchOpts);
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+  const isPdf = contentType.includes("application/pdf") || target.pathname.toLowerCase().endsWith(".pdf");
+
+  if (isPdf) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    try {
+      // @ts-ignore
+      const parsed = await pdfParse(buffer);
+      const html = `<html><body><pre>${parsed.text}</pre></body></html>`;
+      await logJob(jobId, projectId, "info", "PDF extraction completed", { status: response.status, pages: parsed.numpages });
+      return { html, upgrade: false };
+    } catch (err) {
+      throw new Error(`PDF_PARSE_FAILED: ${err}`);
+    }
+  }
+
   const html = await response.text();
   const upgrade = isHeavyJs(html);
   await logJob(jobId, projectId, "info", "Fetch stage completed", {
