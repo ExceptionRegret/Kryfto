@@ -30,7 +30,7 @@ RUN curl -fsSL "https://github.com/pnpm/pnpm/releases/download/v9.12.0/pnpm-linu
     chmod +x /usr/local/bin/pnpm
 
 # Copy package files + lockfile and install production deps only
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY .npmrc package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/worker/package.json apps/worker/package.json
 COPY packages/shared/package.json packages/shared/package.json
 RUN pnpm install --filter @kryfto/worker... --filter @kryfto/shared... --prod --frozen-lockfile
