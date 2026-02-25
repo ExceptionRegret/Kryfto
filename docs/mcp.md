@@ -108,16 +108,25 @@ The MCP server lives at `packages/mcp-server` and bridges MCP tool calls to Kryf
 
 Search engines supported: `duckduckgo`, `bing`, `yahoo`, `google`, `brave`
 
-## Quality & Reliability (v3.2.0)
+## Quality & Reliability (v3.4.0)
 
-The MCP server enforces production-grade search quality:
+The MCP server enforces production-grade, SerpAPI-competitive search quality:
 
-- **Intent Reranking:** Queries are auto-classified as `troubleshooting`, `documentation`, or `news` — domain scores shift dynamically.
+- **Multi-Engine Parallel Search:** All 5 engines (DuckDuckGo, Brave, Bing, Yahoo, Google) queried for every request — no early exit after first success.
+- **Domain-Agnostic Scoring:** No hardcoded technology lists. `domainQueryRelevance()` dynamically matches query terms against domain names. Works for any topic (tech, medical, legal, academic, news, cooking, finance, etc.).
+- **URL Structure Analysis:** `urlOfficialScore()` boosts docs subdomains, /docs paths, .gov TLDs, ReadTheDocs/GitBook; penalizes login/pricing/tracking URLs.
+- **Result Diversity:** `diversityPenalty()` prevents domain concentration — 3rd+ results from same domain are progressively penalized.
+- **8 Intent Types:** `api_docs`, `legal`, `release_notes`, `faq`, `troubleshooting`, `documentation`, `news`, `general` — each with tailored scoring.
+- **Noise Penalty:** YouTube, Reddit, SO, Medium, W3Schools penalized for doc/legal queries; zero penalty for troubleshooting.
+- **Strict Mode:** Auto-enabled for compliance/medical/finance/legal queries (officialOnly=true, 2x noise penalty).
 - **Redirect Canonicalization:** Bing/Yahoo wrapper URLs and tracking parameters (`utm_*`, `gclid`, `fbclid`) are stripped before ranking.
 - **Strict Evidence:** `answer_with_evidence`/`cite` return `insufficient_evidence` if no high-trust spans are found.
 - **Eval Thresholds:** `precision@5 ≥ 75%`, `officialHitRate ≥ 80%`, `searchSuccessRate ≥ 99%` enforced in CI via `pnpm test:eval`.
-- **PDF + Tables:** Native PDF text extraction and Markdown table fidelity via `turndown-plugin-gfm`.
 - **Unified Stealth:** All engine requests use `stealth.ts` — 16 rotated UAs, per-browser `Sec-Ch-Ua`/`Sec-Fetch-*` headers, engine-specific `Referer` and request spacing, in-memory cookie jar.
+- **Direct HTTP Fallback:** When the REST API is unreachable, `federatedSearch` bypasses the API and directly fetches+parses results from 4 engines using shared parsers.
+- **Unconditional Curated Fallback:** When all live search fails, returns 8 universal search-page links (DuckDuckGo, Wikipedia, GitHub, Scholar, SO, Reddit, MDN, Archive.org) for any query.
+- **Fast Circuit Breaker:** 15s reset timeout, 1-success close, automatic all-engines-down recovery.
+- **Per-Engine Observability:** Every failure classified as `dns`/`tls`/`timeout`/`http_4xx`/`http_5xx`/`network`/`unknown` via `getEngineErrorMetrics()`.
 
 ## Build and Run
 

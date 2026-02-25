@@ -22,6 +22,7 @@ The runtime is a Dockerized control-plane + worker system for deterministic data
 3. Worker executes fetch path or Playwright browser path, captures artifacts (HTML/screenshot/HAR/logs/timings), performs extraction, and updates job state.
 4. Artifacts are deduplicated by sha256 in Postgres metadata and stored in MinIO/local FS.
 5. API serves status, logs (SSE), artifact listing/download, extraction-on-demand, and crawl orchestration.
+6. MCP search queries all 5 engines (DDG, Brave, Bing, Yahoo, Google) for maximum coverage, with domain-agnostic scoring via `domainQueryRelevance()` + `urlOfficialScore()` + `diversityPenalty()`. Three-tier fallback: API-based search → Direct HTTP search → Unconditional curated fallback (8 universal search URLs). Circuit breaker with 15s recovery ensures fast failover.
 
 ## Persistence Model
 

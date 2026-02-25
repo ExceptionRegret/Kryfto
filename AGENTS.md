@@ -28,3 +28,12 @@ This repository is **NOT an MVP**. Any automated changes must preserve **product
 - All HTTP requests to search engines must use `getStealthHeaders()` from `@kryfto/shared`.
 - Never hardcode User-Agent strings — use `getRandomUA()` for rotation.
 - The stealth layer handles `Sec-Ch-Ua`, `Sec-Fetch-*`, `Accept`, `Referer`, request spacing, and cookies automatically.
+
+## Engine Reliability (v3.4.0+)
+- `federatedSearch` queries ALL 5 engines (DDG, Brave, Bing, Yahoo, Google) in sequence — no early exit after first success.
+- Three-tier fallback chain: API search → Direct HTTP search → Unconditional curated fallback (8 universal search URLs).
+- Search must **never** return empty results — use `getCuratedFallback()` as the last resort.
+- Circuit breaker recovery must be ≤ 15s. All-engines-down must trigger `forceCircuitRecoveryIfAllDown()`.
+- Scoring is domain-agnostic: no hardcoded technology lists. Use `domainQueryRelevance()` for dynamic matching.
+- Result diversity enforced via `diversityPenalty()` — max 2 results from same domain before penalties kick in.
+- Every engine failure must be classified via `logEngineError()` for per-engine observability.

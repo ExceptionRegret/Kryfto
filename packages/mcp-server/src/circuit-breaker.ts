@@ -12,8 +12,8 @@ export interface EngineHealth {
 }
 
 const FAILURE_THRESHOLD = 3;
-const RESET_TIMEOUT_MS = 60_000;
-const HALF_OPEN_SUCCESS_THRESHOLD = 2;
+const RESET_TIMEOUT_MS = 15_000; // Phase 12: reduced from 60s to 15s for fast recovery
+const HALF_OPEN_SUCCESS_THRESHOLD = 1; // Phase 12: single success closes the circuit
 
 const engineHealthMap = new Map<string, EngineHealth>();
 

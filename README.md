@@ -421,7 +421,34 @@ Apache-2.0 (`LICENSE`)
 
 ## 📋 Changelog
 
-### v3.2.0 — The Moat: Competitive Intelligence Engine (Latest)
+### v3.4.0 — Universal Search Engine (Latest)
+
+_Multi-Engine Parallel Search · Dynamic Scoring · Domain-Agnostic Ranking · Result Diversity · Unconditional Fallback_
+
+- **All 5 Engines Queried Simultaneously:** Removed early-exit that stopped after the first successful engine — DuckDuckGo, Brave, Bing, Yahoo, and Google are now ALL queried for every search, producing broader and more diverse results.
+- **Domain-Agnostic Scoring Engine:** Eliminated all hardcoded technology-to-domain maps. Scoring is now purely algorithmic — `domainQueryRelevance()` extracts query terms and dynamically matches them against any domain name. Works for tech, medical, legal, academic, news, cooking, finance, or any other topic.
+- **Short Tech Name Support:** Go, R, C, C++, PHP, Lua, Zig, Nim, D, V matched via word-boundary regex against known domain maps.
+- **URL Structure Analysis:** `urlOfficialScore()` analyzes URL patterns (subdomains like `docs.*`/`developer.*`, doc paths, .gov TLDs, ReadTheDocs/GitBook, login/pricing page penalties) for universal quality scoring.
+- **Result Diversity:** `diversityPenalty()` prevents any single domain from dominating — 3rd result from the same domain gets -20, 4th -40, 5th+ -60.
+- **8 Intent Types:** Expanded intent detection from 4 to 8: `api_docs`, `legal`, `release_notes`, `faq`, `troubleshooting`, `documentation`, `news`, `general`.
+- **Noise Penalty System:** YouTube, Reddit, Stack Overflow, Medium, W3Schools, etc. penalized -60 to -100 for documentation/legal/API queries; no penalty for troubleshooting where they're actually useful.
+- **Strict Mode Auto-Detection:** Compliance, medical, finance, and legal queries auto-enable `officialOnly=true` with 2x noise penalty multiplier.
+- **Unconditional Curated Fallback:** When all engines + direct HTTP fail, returns 8 universal search-page links (DuckDuckGo, Wikipedia, GitHub, Google Scholar, Stack Overflow, Reddit, MDN, Archive.org) for EVERY query. Zero keyword gating.
+- **46 Scoring Tests:** Comprehensive test coverage for `domainQueryRelevance`, `urlOfficialScore`, `noisePenalty`, `diversityPenalty`, and all 8 intent types.
+
+### v3.3.0 — Engine Connectivity & Reliability
+
+_Direct HTTP Search · Fast Circuit Breaker · Degraded-Mode Fallback · Per-Engine Observability_
+
+- **Direct HTTP Search Fallback:** When the REST API backend is unreachable, `federatedSearch` now bypasses the API and directly fetches+parses search results from DuckDuckGo, Brave, Bing, and Google using the shared search parsers and stealth headers.
+- **Fast Circuit Breaker Recovery:** Reset timeout reduced from 60s to 15s. Single success closes the circuit. `forceCircuitRecoveryIfAllDown()` resets all circuits when every engine is locked out.
+- **Provider Redundancy:** Three-tier fallback chain: API-based search → Direct HTTP search → Curated official-domain results. Search never returns empty.
+- **Degraded-Mode Curated Fallback:** When all live search is unavailable, returns curated canonical docs for 15 major frameworks (React, Next.js, TypeScript, Node.js, Python, Rust, OpenAI, GitHub, Docker, Kubernetes, PostgreSQL, Redis, Vue, Angular, Svelte).
+- **officialOnly Hardening:** `isStrictOfficialSource()` enforced across all three fallback tiers, not just the API path.
+- **Per-Engine Error Classification:** Every engine failure is classified as `dns`, `tls`, `timeout`, `http_4xx`, `http_5xx`, `network`, `parse`, `empty`, or `unknown` via `classifyEngineError()`. Accessible via `getEngineErrorMetrics()`.
+- **SLO Guards:** `search_success_rate < 99%` tracked in eval thresholds; CI blocks deploys on regression.
+
+### v3.2.0 — The Moat: Competitive Intelligence Engine
 
 _Continuous Research Agent · Intent Reranking · PDF Extraction · Strict Evidence · Hardened Webhooks_
 

@@ -3,7 +3,7 @@
 // Update these when releasing a new version.
 
 /** Semantic version of the MCP server package (matches package.json) */
-export const SERVER_VERSION = "3.2.0";
+export const SERVER_VERSION = "3.4.0";
 
 /** Schema version for eval suite output format */
 export const EVAL_SCHEMA_VERSION = "v4";

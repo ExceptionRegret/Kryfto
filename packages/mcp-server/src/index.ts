@@ -12,6 +12,18 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { resolveEngineRedirect, getStealthHeaders, getRandomUA } from "@kryfto/shared";
 import {
+  buildDuckDuckGoSearchUrl,
+  parseDuckDuckGoSearchResults,
+  buildBingHtmlSearchUrl,
+  parseBingHtmlSearchResults,
+  buildYahooSearchUrl,
+  parseYahooSearchResults,
+  buildGoogleHtmlSearchUrl,
+  parseGoogleHtmlSearchResults,
+  buildBraveHtmlSearchUrl,
+  parseBraveHtmlSearchResults,
+} from "@kryfto/shared";
+import {
   normalizeUrl,
   extractDomain,
   isDomainAllowed,
@@ -25,11 +37,21 @@ import {
   isRecencyQuery,
   isOfficialSource,
   isStrictOfficialSource,
+  isCanonicalForQuery,
+  domainMatchesQuery,
+  domainQueryRelevance,
+  urlOfficialScore,
+  diversityPenalty,
   buildSearchQuery,
   extractQueryTerms,
   snippetOverlapBonus,
   titleMatchBonus,
   authorityBonus,
+  canonicalDomainBonus,
+  noisePenalty,
+  rewriteQueryForIntent,
+  detectStrictProfile,
+  shouldTightenDomainsOnFallback,
 } from "./scoring.js";
 import {
   DEFAULT_TRUST,
@@ -41,6 +63,8 @@ import {
   shouldSkipEngine,
   recordEngineSuccess,
   recordEngineFailure,
+  getEngineHealth,
+  resetAllCircuits,
 } from "./circuit-breaker.js";
 import {
   createTrace,
@@ -110,6 +134,160 @@ const FALLBACK_ENGINES = [
   "yahoo",
   "google",
 ] as const;
+
+// ── Phase 12: Per-engine error metrics ──────────────────────────────
+interface EngineErrorMetric {
+  engine: string;
+  errorClass: "dns" | "tls" | "timeout" | "http_4xx" | "http_5xx" | "parse" | "empty" | "network" | "unknown";
+  message: string;
+  timestamp: number;
+}
+const engineErrorLog: EngineErrorMetric[] = [];
+const MAX_ENGINE_ERROR_LOG = 500;
+
+function classifyEngineError(err: unknown): EngineErrorMetric["errorClass"] {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(msg)) return "dns";
+  if (/CERT|TLS|SSL|ERR_TLS/i.test(msg)) return "tls";
+  if (/ETIMEDOUT|ESOCKETTIMEDOUT|timeout|AbortError/i.test(msg)) return "timeout";
+  if (/ECONNREFUSED|ECONNRESET|EPIPE|network/i.test(msg)) return "network";
+  if (/4\d{2}|forbidden|blocked|captcha/i.test(msg)) return "http_4xx";
+  if (/5\d{2}|internal.server/i.test(msg)) return "http_5xx";
+  return "unknown";
+}
+
+function logEngineError(engine: string, err: unknown): void {
+  const errorClass = classifyEngineError(err);
+  const msg = err instanceof Error ? err.message : String(err);
+  engineErrorLog.push({ engine, errorClass, message: msg.substring(0, 200), timestamp: Date.now() });
+  if (engineErrorLog.length > MAX_ENGINE_ERROR_LOG) engineErrorLog.splice(0, engineErrorLog.length - MAX_ENGINE_ERROR_LOG);
+}
+
+function getEngineErrorMetrics(windowMinutes = 60): Record<string, Record<string, number>> {
+  const cutoff = Date.now() - windowMinutes * 60 * 1000;
+  const metrics: Record<string, Record<string, number>> = {};
+  for (const e of engineErrorLog) {
+    if (e.timestamp < cutoff) continue;
+    if (!metrics[e.engine]) metrics[e.engine] = {};
+    metrics[e.engine]![e.errorClass] = (metrics[e.engine]![e.errorClass] ?? 0) + 1;
+  }
+  return metrics;
+}
+
+// ── Phase 12: Direct HTTP search (bypasses REST API) ────────────────
+type DirectSearchResult = { title: string; url: string; snippet?: string; rank: number };
+
+async function directSearchEngine(
+  engine: string,
+  query: string,
+  limit: number,
+  safeSearch: string,
+  locale: string
+): Promise<DirectSearchResult[]> {
+  const ss = (safeSearch || "moderate") as "strict" | "moderate" | "off";
+  const loc = locale || "us-en";
+
+  let searchUrl: string;
+  let parser: (html: string, limit: number) => DirectSearchResult[];
+
+  switch (engine) {
+    case "duckduckgo":
+      searchUrl = buildDuckDuckGoSearchUrl({ query, safeSearch: ss, locale: loc });
+      parser = parseDuckDuckGoSearchResults;
+      break;
+    case "bing":
+      searchUrl = buildBingHtmlSearchUrl({ query, safeSearch: ss, locale: loc });
+      parser = parseBingHtmlSearchResults;
+      break;
+    case "yahoo":
+      searchUrl = buildYahooSearchUrl({ query, safeSearch: ss, locale: loc });
+      parser = parseYahooSearchResults;
+      break;
+    case "google":
+      searchUrl = buildGoogleHtmlSearchUrl({ query, safeSearch: ss, locale: loc });
+      parser = parseGoogleHtmlSearchResults;
+      break;
+    case "brave":
+      searchUrl = buildBraveHtmlSearchUrl({ query, safeSearch: ss, locale: loc });
+      parser = parseBraveHtmlSearchResults;
+      break;
+    default:
+      return [];
+  }
+
+  const ua = getRandomUA();
+  const headers = getStealthHeaders(engine, ua);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const res = await fetch(searchUrl, {
+      headers,
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`HTTP_${res.status}`);
+    const html = await res.text();
+    return parser(html, limit);
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+// ── Phase 14/15: Dynamic curated fallback (works for ANY query) ────
+// ── Phase 15: Fully unconditional curated fallback ─────────────────
+// When ALL engines + direct HTTP are down, return search-page links
+// for every major platform. No keyword gating — every source is
+// returned for EVERY query, because at this point any result is
+// better than nothing.
+function getCuratedFallback(query: string): EnrichedResult[] {
+  const q = encodeURIComponent(query);
+  const make = (
+    title: string, url: string, domain: string, rank: number, official = true
+  ): EnrichedResult => ({
+    title, url, normalizedUrl: normalizeUrl(url),
+    snippet: `Fallback search for "${query}"`,
+    published_at: undefined, source_domain: domain,
+    rank, engine_used: "curated_fallback",
+    confidence: "low" as const, is_official: official,
+  });
+
+  return [
+    // Universal search engines (different from our 5 scraped engines)
+    make(`DuckDuckGo: ${query}`, `https://html.duckduckgo.com/html/?q=${q}`, "duckduckgo.com", 1),
+    // Knowledge
+    make(`${query} — Wikipedia`, `https://en.wikipedia.org/wiki/Special:Search?search=${q}`, "en.wikipedia.org", 2),
+    // Code & projects
+    make(`GitHub: ${query}`, `https://github.com/search?q=${q}&type=repositories`, "github.com", 3),
+    // Academic / research
+    make(`Scholar: ${query}`, `https://scholar.google.com/scholar?q=${q}`, "scholar.google.com", 4),
+    // Community Q&A
+    make(`Stack Overflow: ${query}`, `https://stackoverflow.com/search?q=${q}`, "stackoverflow.com", 5, false),
+    // Discussions & opinions
+    make(`Reddit: ${query}`, `https://www.reddit.com/search/?q=${q}`, "reddit.com", 6, false),
+    // Web standards / developer docs
+    make(`MDN: ${query}`, `https://developer.mozilla.org/en-US/search?q=${q}`, "developer.mozilla.org", 7),
+    // Archived / historical content
+    make(`Archive.org: ${query}`, `https://archive.org/search?query=${q}`, "archive.org", 8),
+  ];
+}
+
+// ── Phase 12: Force circuit breaker recovery when all engines are down
+function forceCircuitRecoveryIfAllDown(): boolean {
+  const engines = FALLBACK_ENGINES;
+  const allOpen = engines.every((e) => {
+    const h = getEngineHealth(e);
+    return h.state === "open";
+  });
+  if (allOpen) {
+    console.error("[MCP] All engines circuit-open, forcing half-open recovery probe");
+    resetAllCircuits();
+    return true;
+  }
+  return false;
+}
 type SearchEngine = (typeof FALLBACK_ENGINES)[number];
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 500;
@@ -960,7 +1138,21 @@ async function federatedSearch(
   const limit = opts.limit ?? 10;
   // Request more results internally if we are doing aggressive filtering or re-ranking
   const internalLimit = opts.officialOnly || opts.sortByDate ? 20 : limit;
-  const finalQuery = buildSearchQuery(query, {
+
+  // Phase 13 #2: Early intent detection for query rewriting + strict mode
+  const earlyIntent = analyzeIntent(query);
+
+  // Phase 13 #6: Auto-detect strict mode for compliance/medical/finance/legal
+  const strictProfile = detectStrictProfile(query, earlyIntent);
+  if (strictProfile && !opts.officialOnly) {
+    opts.officialOnly = strictProfile.officialOnly;
+  }
+
+  // Phase 13 #4: Auto-rewrite query with site: constraints when intent is clear
+  const rewritten = rewriteQueryForIntent(query, earlyIntent, opts.site);
+  const baseQuery = rewritten.query;
+
+  const finalQuery = buildSearchQuery(baseQuery, {
     site: opts.site,
     exclude: opts.exclude,
     inurl: opts.inurl,
@@ -1180,7 +1372,7 @@ async function federatedSearch(
         });
       }
       if (engineSpan && trace) endSpan(trace, engineSpan);
-      if (!opts.engines && allResults.length >= limit) break;
+      // Phase 15: REMOVED early break — always query ALL engines for maximum coverage
     } catch (err) {
       if (engineSpan && trace) endSpan(trace, engineSpan);
       recordEngineFailure(engine);
@@ -1193,7 +1385,88 @@ async function federatedSearch(
           durationMs: Date.now() - t,
           resultCount: 0,
         });
+      logEngineError(engine, err);
     }
+  }
+
+  // ── Phase 12: Direct HTTP fallback when API-based search produced no results ──
+  if (allResults.length === 0 && enginesFailed.length > 0) {
+    console.error("[MCP] All API-based engines failed, trying direct HTTP search...");
+    const directEngines: readonly string[] = ["duckduckgo", "brave", "bing", "google"];
+    for (const dEngine of directEngines) {
+      if (allResults.length >= limit) break;
+      const dt = Date.now();
+      try {
+        const directResults = await directSearchEngine(
+          dEngine,
+          finalQuery !== query ? query : finalQuery,
+          internalLimit,
+          opts.safeSearch ?? "moderate",
+          opts.locale ?? "us-en"
+        );
+        if (directResults.length > 0) {
+          recordEngineSuccess(dEngine);
+          enginesSucceeded.push(`${dEngine}_direct`);
+          if (opts.debug)
+            debugSteps.push({
+              engine: `${dEngine}_direct`,
+              action: "direct_http_search",
+              durationMs: Date.now() - dt,
+              resultCount: directResults.length,
+            });
+          for (const r of directResults) {
+            const resolvedUrl = resolveEngineRedirect(r.url);
+            const normalized = normalizeUrl(resolvedUrl);
+            const domain = extractDomain(resolvedUrl);
+            if (seenUrls.has(normalized)) continue;
+            seenUrls.add(normalized);
+            if (!isUrlAllowed(normalized, domain, DOMAIN_BLOCKLIST, DOMAIN_ALLOWLIST)) continue;
+            if (opts.officialOnly && !isStrictOfficialSource(domain)) continue;
+            allResults.push({
+              title: r.title,
+              url: resolvedUrl,
+              normalizedUrl: normalized,
+              snippet: r.snippet,
+              published_at: r.snippet ? extractDateFromText(r.snippet) : undefined,
+              source_domain: domain,
+              rank: allResults.length + 1,
+              engine_used: `${dEngine}_direct`,
+              confidence: "medium",
+              is_official: isOfficialSource(domain),
+            });
+          }
+          break; // Got results from direct search, stop trying
+        }
+      } catch (directErr) {
+        logEngineError(`${dEngine}_direct`, directErr);
+        if (opts.debug)
+          debugSteps.push({
+            engine: `${dEngine}_direct`,
+            action: "direct_http_failed",
+            durationMs: Date.now() - dt,
+            resultCount: 0,
+          });
+      }
+    }
+  }
+
+  // ── Phase 12: Curated degraded-mode fallback when all live search failed ──
+  if (allResults.length === 0) {
+    console.error("[MCP] All live search failed, returning curated fallback results");
+    const curated = getCuratedFallback(query);
+    if (curated.length > 0) {
+      allResults.push(...curated);
+      enginesSucceeded.push("curated_fallback");
+      if (opts.debug)
+        debugSteps.push({
+          engine: "curated_fallback",
+          action: "degraded_mode",
+          durationMs: 0,
+          resultCount: curated.length,
+        });
+    }
+    // Force circuit recovery for next request
+    forceCircuitRecoveryIfAllDown();
   }
   // Deterministic scoring: combine domain weight + official status + recency + reranker signals
   const scoringSpan = trace ? startSpan(trace, "scoring") : undefined;
@@ -1203,14 +1476,30 @@ async function federatedSearch(
   for (const r of allResults) {
     let domainScore = getDomainWeight(r.source_domain);
 
-    // Phase 10 Intent-based Reranking Shift
+    // Phase 13 #1: Canonical domain bonus for query-relevant official domains
+    const canonBonus = canonicalDomainBonus(r.source_domain, query, intent);
+    domainScore += canonBonus;
+
+    // Phase 13 #3: Noise penalty for doc/legal queries
+    const noise = noisePenalty(r.source_domain, intent);
+    domainScore += strictProfile ? noise * strictProfile.noisePenaltyMultiplier : noise;
+
+    // Phase 10/13 Intent-based Reranking Shift (expanded)
     if (intent === "troubleshooting") {
       if (r.source_domain.includes("stackoverflow.com") || r.source_domain.includes("github.com")) {
         domainScore += 30;
       }
-    } else if (intent === "documentation") {
+    } else if (intent === "documentation" || intent === "api_docs") {
       if (r.is_official) {
-        domainScore += 30;
+        domainScore += 40;
+      }
+    } else if (intent === "legal") {
+      if (r.source_domain.endsWith(".gov") || r.source_domain.endsWith(".gov.uk")) {
+        domainScore += 60;
+      }
+    } else if (intent === "release_notes") {
+      if (r.is_official) {
+        domainScore += 35;
       }
     }
 
@@ -1219,9 +1508,9 @@ async function federatedSearch(
     let recencyBonus = 0;
     if (wantsRecent && r.published_at) {
       const ageMs = Date.now() - new Date(r.published_at).getTime();
-      if (ageMs < 30 * 86400000) recencyBonus = intent === "news" ? 60 : 30;
-      else if (ageMs < 90 * 86400000) recencyBonus = intent === "news" ? 40 : 20;
-      else if (ageMs < 365 * 86400000) recencyBonus = intent === "news" ? 20 : 10;
+      if (ageMs < 30 * 86400000) recencyBonus = intent === "news" || intent === "release_notes" ? 60 : 30;
+      else if (ageMs < 90 * 86400000) recencyBonus = intent === "news" || intent === "release_notes" ? 40 : 20;
+      else if (ageMs < 365 * 86400000) recencyBonus = intent === "news" || intent === "release_notes" ? 20 : 10;
     }
 
     // Version heuristic: if looking for latest, reward URLs with newer semantic versioning patterns
@@ -1234,7 +1523,7 @@ async function federatedSearch(
         const major = parseInt(match[1] ?? "0", 10);
         const minor = parseInt(match[2] ?? "0", 10);
         const patch = parseInt(match[3] ?? "0", 10);
-        versionBonus = major * 0.1 + minor * 1.0 + patch * 0.1; // significantly bump minor revisions
+        versionBonus = major * 0.1 + minor * 1.0 + patch * 0.1;
       }
     }
 
@@ -1243,8 +1532,22 @@ async function federatedSearch(
     const titleBonus = titleMatchBonus(r.title, queryTerms);
     const authBonus = authorityBonus(r.source_domain, intent);
 
+    // Phase 14: URL structure score (docs paths, official subdomains, etc.)
+    const urlScore = urlOfficialScore(r.url, r.source_domain);
+
     (r as any)._score =
-      domainScore + officialBonus + recencyBonus + versionBonus + snippetBonus + titleBonus + authBonus;
+      domainScore + officialBonus + recencyBonus + versionBonus + snippetBonus + titleBonus + authBonus + urlScore;
+  }
+
+  // Phase 14: Apply diversity penalty so one domain doesn't dominate
+  const domainCounts = new Map<string, number>();
+  // Pre-sort by score first, then apply diversity penalty
+  allResults.sort(
+    (a, b) => ((b as any)._score ?? 0) - ((a as any)._score ?? 0)
+  );
+  for (const r of allResults) {
+    const dp = diversityPenalty(r.source_domain, domainCounts);
+    (r as any)._score = ((r as any)._score ?? 0) + dp;
   }
   // Sort by deterministic score (stable ranking across runs)
   allResults.sort(
