@@ -3,10 +3,10 @@ FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Install pnpm from GitHub releases (npm registry blocks pnpm with 403)
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" PNPM_VERSION=9.12.0 sh - && \
-    ln -sf /root/.local/share/pnpm/pnpm /usr/local/bin/pnpm && \
+# Download pnpm standalone binary directly from GitHub releases (bypasses npm 403)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    curl -fsSL "https://github.com/pnpm/pnpm/releases/download/v9.12.0/pnpm-linux-x64" -o /usr/local/bin/pnpm && \
+    chmod +x /usr/local/bin/pnpm && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the entire working directory to ensure all configs and the lockfile are present
@@ -19,10 +19,10 @@ FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Install pnpm from GitHub releases (npm registry blocks pnpm with 403)
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" PNPM_VERSION=9.12.0 sh - && \
-    ln -sf /root/.local/share/pnpm/pnpm /usr/local/bin/pnpm && \
+# Download pnpm standalone binary directly from GitHub releases
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    curl -fsSL "https://github.com/pnpm/pnpm/releases/download/v9.12.0/pnpm-linux-x64" -o /usr/local/bin/pnpm && \
+    chmod +x /usr/local/bin/pnpm && \
     rm -rf /var/lib/apt/lists/*
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
