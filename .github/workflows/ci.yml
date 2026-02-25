@@ -76,6 +76,30 @@ jobs:
           docker compose logs api worker
           exit 1
 
+      - name: Verify worker is running
+        run: |
+          echo "=== Container status ==="
+          docker compose ps
+          echo ""
+          echo "=== Worker logs (last 30 lines) ==="
+          docker compose logs worker --tail 30
+          echo ""
+          # Check if worker container is actually running
+          if ! docker compose ps worker | grep -q "running\|Up"; then
+            echo "❌ Worker container is not running!"
+            docker compose logs worker
+            exit 1
+          fi
+          # Wait for 'Worker online' log message (max 30s)
+          for i in {1..15}; do
+            if docker compose logs worker 2>&1 | grep -q "Worker online"; then
+              echo "✅ Worker is online and processing jobs"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "⚠️ Worker is running but 'Worker online' not found in logs — proceeding anyway"
+
       - name: Integration tests
         env:
           COLLECTOR_BASE_URL: http://localhost:8080
