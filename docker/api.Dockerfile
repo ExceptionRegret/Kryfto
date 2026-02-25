@@ -2,7 +2,7 @@
 FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+RUN npm install -g pnpm@9.12.0
 
 # Copy the entire working directory to ensure all configs and the lockfile are present
 COPY . .
@@ -13,7 +13,7 @@ RUN pnpm --filter @kryfto/shared build && pnpm --filter @kryfto/api build
 FROM node:20-bookworm-slim
 
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+RUN npm install -g pnpm@9.12.0
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/package.json
