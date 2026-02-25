@@ -3,7 +3,7 @@ FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
-RUN npm install -g pnpm@9.12.0
+RUN npm install -g pnpm@9 || curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" PNPM_VERSION=9.12.0 sh - && ln -sf $HOME/.local/share/pnpm/pnpm /usr/local/bin/pnpm
 
 # Copy the entire working directory to ensure all configs and the lockfile are present
 COPY . .
@@ -21,7 +21,7 @@ WORKDIR /app
 # Ensure latest CA certificates are installed for Node native fetch
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm@9.12.0
+RUN npm install -g pnpm@9 || curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" PNPM_VERSION=9.12.0 sh - && ln -sf $HOME/.local/share/pnpm/pnpm /usr/local/bin/pnpm
 
 # Copy package files + lockfile and install production deps only
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./

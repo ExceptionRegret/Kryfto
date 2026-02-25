@@ -2,7 +2,7 @@
 FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
-RUN npm install -g pnpm@9.12.0
+RUN npm install -g pnpm@9 || curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" PNPM_VERSION=9.12.0 sh - && ln -sf $HOME/.local/share/pnpm/pnpm /usr/local/bin/pnpm
 
 # Copy the entire working directory to ensure all configs and the lockfile are present
 COPY . .
@@ -13,7 +13,7 @@ RUN pnpm --filter @kryfto/shared build && pnpm --filter @kryfto/api build
 FROM node:20-bookworm-slim
 
 WORKDIR /app
-RUN npm install -g pnpm@9.12.0
+RUN npm install -g pnpm@9 || curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" PNPM_VERSION=9.12.0 sh - && ln -sf $HOME/.local/share/pnpm/pnpm /usr/local/bin/pnpm
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/package.json
