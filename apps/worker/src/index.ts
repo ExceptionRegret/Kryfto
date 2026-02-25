@@ -14,8 +14,9 @@ import { Redis } from "ioredis";
 import { minimatch } from "minimatch";
 import { trace } from "@opentelemetry/api";
 import pino from "pino";
-// @ts-ignore
-import pdfParse from "pdf-parse";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 import {
   chromium,
   firefox,
