@@ -1,9 +1,14 @@
 {
   "name": "@kryfto/mcp-server",
-  "version": "3.4.0",
-  "private": true,
+  "version": "3.5.0",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "kryfto-mcp": "dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm",
     "typecheck": "tsc -p tsconfig.json --noEmit",

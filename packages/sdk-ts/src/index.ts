@@ -13,10 +13,48 @@ import {
   type SearchResult,
 } from "@kryfto/shared";
 
+/** Input type for search — accepts optional fields that have Zod defaults */
+type SearchInput = {
+  query: string;
+  limit?: number | undefined;
+  engine?: "duckduckgo" | "bing" | "yahoo" | "google" | "brave" | undefined;
+  safeSearch?: "strict" | "moderate" | "off" | undefined;
+  locale?: string | undefined;
+  topic?: "general" | "news" | "finance" | undefined;
+  include_images?: boolean | undefined;
+  include_image_descriptions?: boolean | undefined;
+  privacy_mode?: "normal" | "zero_trace" | undefined;
+  freshness_mode?: "always" | "preferred" | "fallback" | "never" | undefined;
+  location?: string | undefined;
+  proxy_profile?: string | undefined;
+  country?: string | undefined;
+  session_affinity?: boolean | undefined;
+  rotation_strategy?: "per_request" | "sticky" | "random" | undefined;
+};
+
+/** Common shape returned by job-related endpoints */
+export interface JobResponse {
+  jobId: string;
+  id?: string | undefined;
+  state: string;
+  requestId?: string | undefined;
+  idempotencyKey?: string | undefined;
+  [key: string]: unknown;
+}
+
+/** Shape returned by artifact listing */
+export interface ArtifactItem {
+  id?: string | undefined;
+  artifactId?: string | undefined;
+  contentType?: string | undefined;
+  label?: string | undefined;
+  [key: string]: unknown;
+}
+
 export type CollectorClientOptions = {
   baseUrl: string;
-  token?: string;
-  requestId?: string;
+  token?: string | undefined;
+  requestId?: string | undefined;
 };
 
 type RequestOptions = {
@@ -55,13 +93,11 @@ export class CollectorClient {
       ...(options?.headers ?? {}),
     });
 
-    const response = await fetch(`${this.baseUrl}${pathname}`, {
-      method,
-      headers,
-      body: (options?.body !== undefined
-        ? JSON.stringify(options.body)
-        : undefined) as any,
-    });
+    const init: RequestInit = { method, headers };
+    if (options?.body !== undefined) {
+      init.body = JSON.stringify(options.body);
+    }
+    const response = await fetch(`${this.baseUrl}${pathname}`, init);
 
     if (!response.ok) {
       let payload: unknown = undefined;
@@ -106,14 +142,14 @@ export class CollectorClient {
   }
 
   async createJob(
-    input: JobCreateRequest,
+    input: JobCreateRequest | Record<string, unknown>,
     opts?: {
-      idempotencyKey?: string;
-      wait?: boolean;
-      pollMs?: number;
-      timeoutMs?: number;
+      idempotencyKey?: string | undefined;
+      wait?: boolean | undefined;
+      pollMs?: number | undefined;
+      timeoutMs?: number | undefined;
     }
-  ): Promise<any> {
+  ): Promise<JobResponse> {
     const parsed = JobCreateRequestSchema.parse(input);
     const bodyArgs: Record<string, unknown> = {
       method: "POST",
@@ -135,19 +171,19 @@ export class CollectorClient {
     }
 
     return this.waitForJob(response.jobId, {
-      pollMs: opts.pollMs,
-      timeoutMs: opts.timeoutMs,
-    } as any);
+      pollMs: opts?.pollMs,
+      timeoutMs: opts?.timeoutMs,
+    });
   }
 
-  async getJob(jobId: string): Promise<any> {
+  async getJob(jobId: string): Promise<JobResponse> {
     return this.request(`/v1/jobs/${jobId}`);
   }
 
   async waitForJob(
     jobId: string,
-    opts?: { pollMs?: number; timeoutMs?: number }
-  ): Promise<any> {
+    opts?: { pollMs?: number | undefined; timeoutMs?: number | undefined }
+  ): Promise<JobResponse> {
     const pollMs = opts?.pollMs ?? 1000;
     const timeoutMs = opts?.timeoutMs ?? 300_000;
     const started = Date.now();
@@ -168,7 +204,7 @@ export class CollectorClient {
     }
   }
 
-  async cancelJob(jobId: string): Promise<any> {
+  async cancelJob(jobId: string): Promise<JobResponse> {
     return this.request(`/v1/jobs/${jobId}/cancel`, { method: "POST" });
   }
 
@@ -176,13 +212,13 @@ export class CollectorClient {
     return this.request(`/v1/jobs/${jobId}/logs`, { responseType: "text" });
   }
 
-  async listArtifacts(jobId: string): Promise<{ items: any[] }> {
+  async listArtifacts(jobId: string): Promise<{ items: ArtifactItem[] }> {
     return this.request(`/v1/jobs/${jobId}/artifacts`);
   }
 
   async getArtifact(
     artifactId: string,
-    opts?: { downloadToken?: string }
+    opts?: { downloadToken?: string | undefined }
   ): Promise<Buffer> {
     const query = opts?.downloadToken
       ? `?downloadToken=${encodeURIComponent(opts.downloadToken)}`
@@ -193,20 +229,20 @@ export class CollectorClient {
   }
 
   async extract(
-    input: ExtractRequest
+    input: ExtractRequest | Record<string, unknown>
   ): Promise<{ data: unknown; mode: string }> {
     const parsed = ExtractRequestSchema.parse(input);
     return this.request("/v1/extract", { method: "POST", body: parsed });
   }
 
   async crawl(
-    input: CrawlRequest
+    input: CrawlRequest | Record<string, unknown>
   ): Promise<{ crawlId: string; state: string; requestId: string }> {
     const parsed = CrawlRequestSchema.parse(input);
     return this.request("/v1/crawl", { method: "POST", body: parsed });
   }
 
-  async search(input: SearchRequest): Promise<{
+  async search(input: SearchInput): Promise<{
     query: string;
     limit: number;
     engine: string;
@@ -219,7 +255,7 @@ export class CollectorClient {
     return this.request("/v1/search", { method: "POST", body: parsed });
   }
 
-  async getCrawl(crawlId: string): Promise<any> {
+  async getCrawl(crawlId: string): Promise<Record<string, unknown>> {
     return this.request(`/v1/crawl/${crawlId}`);
   }
 

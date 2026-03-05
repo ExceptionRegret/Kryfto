@@ -84,7 +84,7 @@ jobs
       {
         url: options.url,
         ...(options.recipe ? { recipeId: options.recipe } : {}),
-      } as any,
+      },
       {
         idempotencyKey: options.idempotencyKey,
         wait: Boolean(options.wait),
@@ -164,7 +164,7 @@ program
       seed: options.seed,
       ...(rules ? { rules } : {}),
       ...(options.recipe ? { recipeId: options.recipe } : {}),
-    } as any);
+    });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 
@@ -186,7 +186,7 @@ program
       safeSearch: options.safeSearch ?? "moderate",
       locale: options.locale ?? "us-en",
       engine: options.engine,
-    } as any);
+    });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 

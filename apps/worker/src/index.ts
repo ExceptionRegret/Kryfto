@@ -39,6 +39,7 @@ import {
   parseAllowHosts,
   sanitizeStepForLogs,
   sha256Hex,
+  type CookieInput,
   type CrawlRequest,
   type JobCreateRequest,
   type Step,
@@ -116,6 +117,10 @@ const pgPool = new Pool({
   database: POSTGRES_DB,
   user: POSTGRES_USER,
   password: POSTGRES_PASSWORD,
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  allowExitOnIdle: true,
 });
 
 const jobsQueue = new Queue("collector-jobs", {
@@ -308,7 +313,7 @@ VALUES($1, $2, $3, $4, $5, $6)
 async function loadProfileCookies(
   projectId: string,
   name: string
-): Promise<any[] | null> {
+): Promise<CookieInput[] | null> {
   const result = await pgPool.query<{ encrypted_cookies: string }>(
     `SELECT encrypted_cookies FROM browser_profiles WHERE project_id = $1 AND name = $2 ORDER BY updated_at DESC LIMIT 1`,
     [projectId, name]
@@ -316,7 +321,7 @@ async function loadProfileCookies(
   const record = result.rows[0];
   if (!record) return null;
   try {
-    return decryptJson<any[]>(record.encrypted_cookies);
+    return decryptJson<CookieInput[]>(record.encrypted_cookies);
   } catch {
     return null;
   }
@@ -372,6 +377,20 @@ function isHeavyJs(html: string): boolean {
   );
 }
 
+/** Strip `undefined` values so Playwright's exactOptionalPropertyTypes are satisfied */
+function toPlaywrightCookies(cookies: CookieInput[]): Array<{ name: string; value: string; domain?: string; path?: string; expires?: number; httpOnly?: boolean; secure?: boolean; sameSite?: "Strict" | "Lax" | "None" }> {
+  return cookies.map((c) => {
+    const out: { name: string; value: string; domain?: string; path?: string; expires?: number; httpOnly?: boolean; secure?: boolean; sameSite?: "Strict" | "Lax" | "None" } = { name: c.name, value: c.value };
+    if (c.domain !== undefined) out.domain = c.domain;
+    if (c.path !== undefined) out.path = c.path;
+    if (c.expires !== undefined) out.expires = c.expires;
+    if (c.httpOnly !== undefined) out.httpOnly = c.httpOnly;
+    if (c.secure !== undefined) out.secure = c.secure;
+    if (c.sameSite !== undefined) out.sameSite = c.sameSite;
+    return out;
+  });
+}
+
 function engineToBrowser(engine: JobCreateRequest["options"]["browserEngine"]) {
   if (engine === "firefox") return firefox;
   if (engine === "webkit") return webkit;
@@ -398,7 +417,7 @@ async function runBrowserStep(
       await page.setExtraHTTPHeaders(step.args.headers);
       return;
     case "setCookies":
-      await context.addCookies(step.args.cookies as any[]);
+      await context.addCookies(toPlaywrightCookies(step.args.cookies));
       return;
     case "exportCookies":
       cookies.value = await context.cookies();
@@ -418,7 +437,7 @@ async function runBrowserStep(
       const delta =
         step.args.direction === "down" ? step.args.amount : -step.args.amount;
       await page.evaluate(
-        (value) => (globalThis as any).window.scrollBy(0, value),
+        (value) => window.scrollBy(0, value),
         delta
       );
       return;
@@ -504,7 +523,7 @@ async function runBrowser(
   });
   const previousCookies = await loadProfileCookies(projectId, profileName);
   if (previousCookies?.length) {
-    await context.addCookies(previousCookies as any[]);
+    await context.addCookies(toPlaywrightCookies(previousCookies));
   }
 
   const page = await context.newPage();
@@ -598,18 +617,15 @@ async function runFetch(
     if (!allowed) throw new Error("ROBOTS_TXT_DENIED");
   }
 
-  const fetchOpts: any = {
+  const dispatcher = stealthOpts.proxyUrls.length > 0
+    ? new ProxyAgent(pickRandom(stealthOpts.proxyUrls))
+    : undefined;
+
+  const response = await undiciFetch(target, {
     signal: AbortSignal.timeout(request.options.timeoutMs),
     redirect: "follow",
-  };
-
-  if (stealthOpts.proxyUrls.length > 0) {
-    const proxyUrl = pickRandom(stealthOpts.proxyUrls);
-    // Use undici's ProxyAgent
-    fetchOpts.dispatcher = new ProxyAgent(proxyUrl);
-  }
-
-  const response = await undiciFetch(target, fetchOpts);
+    ...(dispatcher ? { dispatcher } : {}),
+  });
   const contentType = response.headers.get("content-type")?.toLowerCase() || "";
   const isPdf = contentType.includes("application/pdf") || target.pathname.toLowerCase().endsWith(".pdf");
 
@@ -1088,9 +1104,11 @@ crawlWorker.on("failed", async (job, error) => {
   );
 });
 
-process.on("SIGINT", async () => {
-  logger.info("Shutting down worker");
-  await Promise.allSettled([
+async function shutdown(signal: string) {
+  logger.info(`Received ${signal}, shutting down gracefully...`);
+  const SHUTDOWN_TIMEOUT_MS = 30_000;
+
+  const cleanup = Promise.allSettled([
     collectionWorker.close(),
     crawlWorker.close(),
     deadLetterQueue.close(),
@@ -1098,7 +1116,30 @@ process.on("SIGINT", async () => {
     redis.quit(),
     pgPool.end(),
   ]);
-  process.exit(0);
+
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Shutdown timed out")), SHUTDOWN_TIMEOUT_MS)
+  );
+
+  try {
+    await Promise.race([cleanup, timeout]);
+    logger.info("Graceful shutdown complete");
+    process.exit(0);
+  } catch (err) {
+    logger.error(`Forced shutdown: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", (err) => {
+  logger.error(`Uncaught exception: ${err.message}`);
+  shutdown("uncaughtException");
+});
+process.on("unhandledRejection", (reason) => {
+  logger.error(`Unhandled rejection: ${reason}`);
+  shutdown("unhandledRejection");
 });
 
 logger.info("Worker online");

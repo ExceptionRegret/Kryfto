@@ -143,6 +143,34 @@ describe("scoring", () => {
         "test -ads -spam"
       );
     });
+
+    it("adds inurl: operator", () => {
+      expect(buildSearchQuery("test", { inurl: "docs" })).toBe(
+        "inurl:docs test"
+      );
+    });
+
+    it("sanitizes injected search operators in site value", () => {
+      const result = buildSearchQuery("test", { site: "evil.com site:bank.com" });
+      expect(result).not.toContain("site:bank.com");
+      expect(result).toContain("site:evil.com");
+    });
+
+    it("sanitizes injected search operators in exclude values", () => {
+      const result = buildSearchQuery("test", { exclude: ["site:evil.com"] });
+      expect(result).not.toContain("site:evil.com");
+    });
+
+    it("sanitizes injected search operators in inurl value", () => {
+      const result = buildSearchQuery("test", { inurl: "filetype:pdf secret" });
+      expect(result).not.toContain("filetype:pdf");
+    });
+
+    it("strips quotes and newlines from operator values", () => {
+      const result = buildSearchQuery("test", { site: 'evil.com"\nsite:bank.com' });
+      expect(result).not.toContain('"');
+      expect(result).not.toContain("\n");
+    });
   });
 
   describe("reranker signals", () => {

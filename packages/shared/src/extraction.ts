@@ -85,7 +85,7 @@ export function extractByJsonSchema(
   const $ = load(html);
   const text = $("body").text().replace(/\s+/gu, " ").trim();
   const properties =
-    (schema.properties as Record<string, any> | undefined) ?? {};
+    (schema.properties as Record<string, Record<string, unknown>> | undefined) ?? {};
 
   for (const [key, property] of Object.entries(properties)) {
     const selector = property?.["x-selector"];

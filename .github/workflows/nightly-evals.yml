@@ -1,0 +1,66 @@
+name: nightly-evals
+
+on:
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: "0 2 * * *"
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  eval:
+    name: Nightly Search Quality Eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        run: |
+          curl -fsSL "https://github.com/pnpm/pnpm/releases/download/v9.12.0/pnpm-linux-x64" -o /usr/local/bin/pnpm
+          chmod +x /usr/local/bin/pnpm
+          pnpm --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Prepare env
+        run: |
+          cp .env.example .env
+          sed -i 's/^KRYFTO_API_TOKEN=.*/KRYFTO_API_TOKEN=dev_admin_token_change_me/' .env
+          sed -i 's/^KRYFTO_BOOTSTRAP_ADMIN_TOKEN=.*/KRYFTO_BOOTSTRAP_ADMIN_TOKEN=dev_admin_token_change_me/' .env
+
+      - name: Build and start compose
+        run: docker compose up -d --build
+
+      - name: Wait for API
+        run: |
+          for i in {1..60}; do
+            if curl -sf http://localhost:8080/v1/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "API did not become healthy in time"
+          docker compose logs api worker
+          exit 1
+
+      - name: Run Eval Suite
+        env:
+          COLLECTOR_BASE_URL: http://localhost:8080
+          KRYFTO_API_TOKEN: dev_admin_token_change_me
+        run: pnpm test:eval 2>&1 | tee eval-results.json
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-${{ github.run_number }}
+          path: eval-results.json
+          retention-days: 90
+
+      - name: Shutdown compose
+        if: always()
+        run: docker compose down -v

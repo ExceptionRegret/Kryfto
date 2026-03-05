@@ -368,15 +368,20 @@ export function detectStrictProfile(query: string, intent: Intent): StrictProfil
 
 // ── Query builder ────────────────────────────────────────────────
 
+/** Strip search operators that could manipulate query intent */
+function sanitizeOperatorValue(value: string): string {
+  return value.replace(/["\n\r]/g, "").replace(/\b(site|inurl|filetype|intitle|intext|cache|related):/gi, "").trim();
+}
+
 export function buildSearchQuery(
   query: string,
-  opts?: { site?: string; exclude?: string[]; inurl?: string }
+  opts?: { site?: string | undefined; exclude?: string[] | undefined; inurl?: string | undefined }
 ): string {
   let q = query;
-  if (opts?.site) q = `site:${opts.site} ${q}`;
-  if (opts?.inurl) q = `inurl:${opts.inurl} ${q}`;
+  if (opts?.site) q = `site:${sanitizeOperatorValue(opts.site)} ${q}`;
+  if (opts?.inurl) q = `inurl:${sanitizeOperatorValue(opts.inurl)} ${q}`;
   if (opts?.exclude?.length)
-    q += ` ${opts.exclude.map((e) => `-${e}`).join(" ")}`;
+    q += ` ${opts.exclude.map((e) => `-${sanitizeOperatorValue(e)}`).join(" ")}`;
   return q;
 }
 

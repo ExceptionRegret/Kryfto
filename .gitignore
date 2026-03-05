@@ -1,14 +1,75 @@
-node_modules
-**/dist
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+**/dist/
+*.tsbuildinfo
+
+# Environment & secrets
 .env
 .env.*
 !.env.example
-.pnpm-store
-.DS_Store
-*.log
-coverage
-__pycache__
-*.pyc
-data/
-*.tsbuildinfo
+*.pem
+*.key
+*.crt
 
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Test & coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Python (if any scripts)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Docker
+data/
+
+# Claude Code
+.claude/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+errors.txt
+errors-utf8.txt
+typecheck_output.txt
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Turbo
+.turbo/
+
+# Changeset
+.changeset/*.md
+!.changeset/README.md

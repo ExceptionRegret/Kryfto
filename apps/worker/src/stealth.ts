@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type {
   Browser,
   BrowserContext,
@@ -6,22 +5,10 @@ import type {
   LaunchOptions,
   Page,
 } from "playwright";
+import { getRandomUA } from "@kryfto/shared";
 
 // ─── User-Agent Pool ────────────────────────────────────────────────
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
-  "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
-];
+// Uses the unified UA pool from @kryfto/shared (single source of truth).
 
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -43,9 +30,12 @@ const TIMEZONES = [
 
 const LOCALES = ["en-US", "en-GB", "en-CA", "en-AU", "de-DE", "fr-FR"];
 
+// Hardware concurrency values seen on real machines
+const HARDWARE_CONCURRENCY_VALUES = [4, 6, 8, 10, 12, 16];
+
 // ─── Helpers ────────────────────────────────────────────────────────
-export function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+export function pickRandom<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)]!;
 }
 
 /** Parse comma-separated proxy URLs from env. Returns empty array if unset. */
@@ -55,6 +45,26 @@ export function parseProxyUrls(envValue?: string): string[] {
     .split(",")
     .map((u) => u.trim())
     .filter(Boolean);
+}
+
+/**
+ * Derive the correct navigator.platform value from a User-Agent string.
+ * Prevents mismatches like Windows UA + macOS platform which is an instant detection signal.
+ */
+function platformFromUA(ua: string): string {
+  if (ua.includes("Macintosh") || ua.includes("Mac OS X")) return "MacIntel";
+  if (ua.includes("Linux") || ua.includes("X11")) return "Linux x86_64";
+  return "Win32"; // Default to Windows
+}
+
+/**
+ * Derive the correct navigator.languages from a locale string.
+ * E.g., "en-GB" → ["en-GB", "en"], "de-DE" → ["de-DE", "de"]
+ */
+function languagesFromLocale(locale: string): string[] {
+  const base = locale.split("-")[0] ?? "en";
+  if (locale === base) return [locale];
+  return [locale, base];
 }
 
 // ─── Stealth Browser Launch ─────────────────────────────────────────
@@ -106,7 +116,7 @@ export function getStealthContextOptions(
   const contextOpts: Record<string, unknown> = {};
 
   if (opts.rotateUserAgent) {
-    contextOpts.userAgent = pickRandom(USER_AGENTS);
+    contextOpts.userAgent = getRandomUA();
   }
 
   contextOpts.viewport = pickRandom(VIEWPORTS);
@@ -122,95 +132,176 @@ export function getStealthContextOptions(
 /**
  * Inject scripts that patch browser automation tells:
  * - navigator.webdriver → false
- * - navigator.plugins → realistic array
- * - navigator.languages → match context locale
+ * - navigator.plugins → realistic array (no deprecated Native Client)
+ * - navigator.languages → match context locale (not hardcoded)
+ * - navigator.hardwareConcurrency → realistic randomized value
+ * - navigator.platform → matches the User-Agent string
  * - window.chrome → defined
  */
-export async function applyStealthScripts(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    // 1. Hide webdriver flag
-    Object.defineProperty(navigator, "webdriver", { get: () => false });
+export async function applyStealthScripts(
+  page: Page,
+  contextOpts?: Record<string, unknown>
+): Promise<void> {
+  // Derive runtime values from context options
+  const ua = (contextOpts?.userAgent as string) ?? "";
+  const locale = (contextOpts?.locale as string) ?? "en-US";
+  const platform = platformFromUA(ua);
+  const languages = languagesFromLocale(locale);
+  const hardwareConcurrency = pickRandom(HARDWARE_CONCURRENCY_VALUES);
 
-    // 2. Fake plugins array (Chrome-like)
-    Object.defineProperty(navigator, "plugins", {
-      get: () => {
-        const fakePlugins = [
-          {
-            name: "Chrome PDF Plugin",
-            filename: "internal-pdf-viewer",
-            description: "Portable Document Format",
-          },
-          {
-            name: "Chrome PDF Viewer",
-            filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
-            description: "",
-          },
-          {
-            name: "Native Client",
-            filename: "internal-nacl-plugin",
-            description: "",
-          },
-        ];
-        const arr = Object.create(PluginArray.prototype);
-        for (let i = 0; i < fakePlugins.length; i++) {
-          const p = Object.create(Plugin.prototype);
-          Object.defineProperties(p, {
-            name: { value: fakePlugins[i]!.name, enumerable: true },
-            filename: { value: fakePlugins[i]!.filename, enumerable: true },
-            description: {
-              value: fakePlugins[i]!.description,
-              enumerable: true,
+  await page.addInitScript(
+    (opts: {
+      platform: string;
+      languages: string[];
+      hardwareConcurrency: number;
+    }) => {
+      // 1. Hide webdriver flag
+      Object.defineProperty(navigator, "webdriver", { get: () => false });
+
+      // 2. Fake plugins array (Chrome-like, no deprecated Native Client)
+      Object.defineProperty(navigator, "plugins", {
+        get: () => {
+          const fakePlugins = [
+            {
+              name: "Chrome PDF Plugin",
+              filename: "internal-pdf-viewer",
+              description: "Portable Document Format",
             },
-            length: { value: 0, enumerable: true },
+            {
+              name: "Chrome PDF Viewer",
+              filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
+              description: "",
+            },
+          ];
+          const arr = Object.create(PluginArray.prototype);
+          for (let i = 0; i < fakePlugins.length; i++) {
+            const p = Object.create(Plugin.prototype);
+            Object.defineProperties(p, {
+              name: { value: fakePlugins[i]!.name, enumerable: true },
+              filename: { value: fakePlugins[i]!.filename, enumerable: true },
+              description: {
+                value: fakePlugins[i]!.description,
+                enumerable: true,
+              },
+              length: { value: 0, enumerable: true },
+            });
+            arr[i] = p;
+          }
+          Object.defineProperty(arr, "length", {
+            value: fakePlugins.length,
+            enumerable: true,
           });
-          arr[i] = p;
-        }
-        Object.defineProperty(arr, "length", {
-          value: fakePlugins.length,
-          enumerable: true,
-        });
-        return arr;
-      },
-    });
-
-    // 3. Fake languages
-    Object.defineProperty(navigator, "languages", {
-      get: () => ["en-US", "en"],
-    });
-
-    // 4. Ensure chrome runtime object exists (many bot detectors check this)
-    if (!(window as any).chrome) {
-      (window as any).chrome = {
-        runtime: {
-          connect: () => {},
-          sendMessage: () => {},
-        },
-      };
-    }
-
-    // 5. Prevent iframe contentWindow detection
-    const originalQuery =
-      window.HTMLIFrameElement.prototype.__lookupGetter__?.("contentWindow");
-    if (originalQuery) {
-      Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
-        get: function () {
-          return originalQuery.call(this);
+          return arr;
         },
       });
-    }
 
-    // 6. Patch permissions query for notifications
-    const originalPermissions = navigator.permissions?.query;
-    if (originalPermissions) {
-      navigator.permissions.query = (parameters: PermissionDescriptor) => {
-        if (parameters.name === "notifications") {
-          return Promise.resolve({
-            state: "denied",
-            onchange: null,
-          } as PermissionStatus);
+      // 3. Languages derived from context locale (not hardcoded)
+      Object.defineProperty(navigator, "languages", {
+        get: () => opts.languages,
+      });
+
+      // 4. Platform matching the UA string
+      Object.defineProperty(navigator, "platform", {
+        get: () => opts.platform,
+      });
+
+      // 5. Realistic hardware concurrency
+      Object.defineProperty(navigator, "hardwareConcurrency", {
+        get: () => opts.hardwareConcurrency,
+      });
+
+      // 6. Ensure chrome runtime object exists (many bot detectors check this)
+      if (!(window as unknown as Record<string, unknown>).chrome) {
+        (window as unknown as Record<string, unknown>).chrome = {
+          runtime: {
+            connect: () => { },
+            sendMessage: () => { },
+          },
+        };
+      }
+
+      // 7. Prevent iframe contentWindow detection
+      const originalQuery = (
+        window.HTMLIFrameElement.prototype as unknown as { __lookupGetter__?: (prop: string) => (() => Window | null) | undefined }
+      ).__lookupGetter__?.call(
+        window.HTMLIFrameElement.prototype,
+        "contentWindow"
+      ) as (() => Window | null) | undefined;
+      if (originalQuery) {
+        Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
+          get: function (this: HTMLIFrameElement) {
+            return originalQuery.call(this);
+          },
+        });
+      }
+
+      // 8. Patch permissions query for notifications
+      const originalPermissions = navigator.permissions?.query;
+      if (originalPermissions) {
+        navigator.permissions.query = (parameters: PermissionDescriptor) => {
+          if (parameters.name === "notifications") {
+            return Promise.resolve({
+              state: "denied",
+              onchange: null,
+            } as PermissionStatus);
+          }
+          return originalPermissions.call(navigator.permissions, parameters);
+        };
+      }
+
+      // 9. Canvas fingerprint randomization — inject subtle noise
+      const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+      HTMLCanvasElement.prototype.toDataURL = function (
+        this: HTMLCanvasElement,
+        ...args: [string?, number?]
+      ) {
+        const ctx = this.getContext("2d");
+        if (ctx && this.width > 0 && this.height > 0) {
+          const imageData = ctx.getImageData(0, 0, this.width, this.height);
+          for (let i = 0; i < imageData.data.length; i += 4) {
+            imageData.data[i]! += Math.floor(Math.random() * 3) - 1; // R ±1
+          }
+          ctx.putImageData(imageData, 0, 0);
         }
-        return originalPermissions.call(navigator.permissions, parameters);
+        return origToDataURL.apply(this, args);
       };
-    }
-  });
+
+      const origToBlob = HTMLCanvasElement.prototype.toBlob;
+      HTMLCanvasElement.prototype.toBlob = function (
+        this: HTMLCanvasElement,
+        callback: BlobCallback,
+        ...args: [string?, number?]
+      ) {
+        const ctx = this.getContext("2d");
+        if (ctx && this.width > 0 && this.height > 0) {
+          const imageData = ctx.getImageData(0, 0, this.width, this.height);
+          for (let i = 0; i < imageData.data.length; i += 4) {
+            imageData.data[i]! += Math.floor(Math.random() * 3) - 1;
+          }
+          ctx.putImageData(imageData, 0, 0);
+        }
+        return origToBlob.call(this, callback, ...args);
+      };
+
+      // 10. WebGL vendor/renderer spoofing
+      const spoofWebGL = (proto: WebGLRenderingContext | null) => {
+        if (!proto) return;
+        const origGetParam = proto.getParameter;
+        proto.getParameter = function (param: number) {
+          if (param === 37445) return "Intel Inc.";
+          if (param === 37446) return "Intel Iris OpenGL Engine";
+          return origGetParam.call(this, param);
+        };
+      };
+      try {
+        spoofWebGL(WebGLRenderingContext.prototype);
+      } catch { /* WebGL unavailable */ }
+      try {
+        if (typeof WebGL2RenderingContext !== "undefined") {
+          spoofWebGL(WebGL2RenderingContext.prototype as unknown as WebGLRenderingContext);
+        }
+      } catch { /* WebGL2 unavailable */ }
+    },
+    { platform, languages, hardwareConcurrency }
+  );
 }
