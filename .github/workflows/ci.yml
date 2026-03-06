@@ -129,7 +129,7 @@ jobs:
           retention-days: 30
 
       - name: Docker image scan (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.31.0
         with:
           scan-type: fs
           scan-ref: .
