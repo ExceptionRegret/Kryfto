@@ -13,7 +13,11 @@ import {
     getRandomUA,
     getStealthHeaders,
     resolveEngineRedirect,
+    engineDelay,
+    getGoogleConsentCookieHeader,
 } from "@kryfto/shared";
+import type { Browser, BrowserContext, Page } from "playwright";
+import { solveGoogleSorryPage } from "./recaptcha-vision.js";
 import type {
     SearchEngine,
     DirectSearchResult,
@@ -85,6 +89,218 @@ const DOMAIN_ALLOWLIST = new Set(
         .filter(Boolean)
 );
 
+// ── Browser-based Google Search ─────────────────────────────────────
+// Google now requires JS execution. We use a lazy-loaded Playwright
+// browser with stealth to render the page and extract results.
+
+let _googleBrowser: Browser | null = null;
+let _googleBrowserPromise: Promise<Browser> | null = null;
+
+async function getGoogleBrowser(): Promise<Browser> {
+    if (_googleBrowser?.isConnected()) return _googleBrowser;
+    if (_googleBrowserPromise) return _googleBrowserPromise;
+    _googleBrowserPromise = (async () => {
+        try {
+            const pw = await import("playwright");
+            const browser = await pw.chromium.launch({
+                headless: true,
+                args: [
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            });
+            _googleBrowser = browser;
+            return browser;
+        } finally {
+            _googleBrowserPromise = null;
+        }
+    })();
+    return _googleBrowserPromise;
+}
+
+async function applyMinimalStealth(page: Page, ua: string): Promise<void> {
+    const platform = ua.includes("Mac") ? "MacIntel" : ua.includes("Linux") ? "Linux x86_64" : "Win32";
+    const audioNoise = (Math.random() * 0.00001) - 0.000005;
+
+    // Use string-based init script to avoid DOM type issues in Node tsconfig
+    await page.addInitScript(`(function() {
+        var platform = ${JSON.stringify(platform)};
+        var audioNoiseSeed = ${audioNoise * 100000};
+
+        // 1. Core automation tells
+        Object.defineProperty(navigator, 'webdriver', { get: function() { return false; }, configurable: true });
+        try { delete Navigator.prototype.webdriver; } catch(e) {}
+        Object.defineProperty(Navigator.prototype, 'webdriver', { get: function() { return false; }, configurable: true });
+        Object.defineProperty(navigator, 'platform', { get: function() { return platform; } });
+        Object.defineProperty(navigator, 'languages', { get: function() { return Object.freeze(['en-US', 'en']); } });
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: function() { return 8; } });
+        Object.defineProperty(navigator, 'deviceMemory', { get: function() { return 8; } });
+        Object.defineProperty(navigator, 'maxTouchPoints', { get: function() { return 0; } });
+
+        // 2. Chrome runtime (comprehensive)
+        if (!window.chrome) {
+            window.chrome = {
+                app: { isInstalled: false, getDetails: function() { return null; }, getIsInstalled: function() { return false; },
+                    InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+                    RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } },
+                csi: function() { return {}; },
+                loadTimes: function() { return {
+                    commitLoadTime: performance.now()/1000, connectionInfo: 'h2',
+                    finishDocumentLoadTime: performance.now()/1000, finishLoadTime: performance.now()/1000,
+                    navigationType: 'Other', npnNegotiatedProtocol: 'h2',
+                    requestTime: performance.now()/1000 - 0.5, startLoadTime: performance.now()/1000 - 0.3,
+                    wasAlternateProtocolAvailable: false, wasFetchedViaSpdy: true, wasNpnNegotiated: true }; },
+                runtime: { connect: function(){}, sendMessage: function(){}, id: undefined,
+                    OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformOs: {} }
+            };
+        }
+
+        // 3. Permissions API
+        if (navigator.permissions && navigator.permissions.query) {
+            var origQuery = navigator.permissions.query.bind(navigator.permissions);
+            navigator.permissions.query = function(p) {
+                if (p.name === 'notifications') return Promise.resolve({ state: 'prompt', onchange: null });
+                return origQuery(p);
+            };
+        }
+
+        // 4. Canvas fingerprint noise
+        var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function() {
+            var ctx = this.getContext('2d');
+            if (ctx && this.width > 0 && this.height > 0 && this.width < 500) {
+                var d = ctx.getImageData(0, 0, this.width, this.height);
+                for (var i = 0; i < Math.min(d.data.length, 4000); i += 4) {
+                    d.data[i] += ((audioNoiseSeed * (i+1) * 9301 + 49297) % 233280) / 233280 > 0.5 ? 1 : -1;
+                }
+                ctx.putImageData(d, 0, 0);
+            }
+            return origToDataURL.apply(this, arguments);
+        };
+
+        // 5. WebGL vendor/renderer
+        function spoofGL(proto) {
+            if (!proto) return;
+            var orig = proto.getParameter;
+            proto.getParameter = function(p) {
+                if (p === 37445) return 'Google Inc. (Intel)';
+                if (p === 37446) return 'ANGLE (Intel, Intel(R) UHD Graphics 630, OpenGL 4.1)';
+                return orig.call(this, p);
+            };
+        }
+        try { spoofGL(WebGLRenderingContext.prototype); } catch(e) {}
+        try { if (typeof WebGL2RenderingContext !== 'undefined') spoofGL(WebGL2RenderingContext.prototype); } catch(e) {}
+
+        // 6. WebRTC IP leak prevention
+        if (window.RTCPeerConnection) {
+            var origRTC = window.RTCPeerConnection;
+            window.RTCPeerConnection = function(config) {
+                return new origRTC(Object.assign({}, config, { iceServers: [], iceCandidatePoolSize: 0 }));
+            };
+            window.RTCPeerConnection.prototype = origRTC.prototype;
+        }
+
+        // 7. Performance timing noise
+        var origNow = performance.now.bind(performance);
+        performance.now = function() { return origNow() + (Math.random() * 0.1); };
+
+        // 8. document.hasFocus
+        document.hasFocus = function() { return true; };
+
+        // 9. Headless Notification fix
+        if (typeof Notification !== 'undefined') {
+            Object.defineProperty(Notification, 'permission', { get: function() { return 'default'; } });
+        }
+    })();`);
+}
+
+async function browserSearchGoogle(
+    query: string,
+    limit: number,
+    safeSearch: string,
+    locale: string,
+): Promise<DirectSearchResult[]> {
+    const ss = (safeSearch || "moderate") as "strict" | "moderate" | "off";
+    const loc = locale || "us-en";
+    const searchUrl = buildGoogleHtmlSearchUrl({ query, safeSearch: ss, locale: loc });
+    const ua = getRandomUA();
+
+    const browser = await getGoogleBrowser();
+    const context = await browser.newContext({
+        userAgent: ua,
+        viewport: { width: 1366, height: 768 },
+        locale: "en-US",
+        timezoneId: "America/New_York",
+    });
+
+    const page = await context.newPage();
+    await applyMinimalStealth(page, ua);
+
+    // Set Google consent cookie before navigating
+    await context.addCookies([{
+        name: "SOCS",
+        value: "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjUwMzA0LjA3X3AxGgJlbiACGgYIgJCptgY",
+        domain: ".google.com",
+        path: "/",
+    }]);
+
+    try {
+        // Visit Google homepage first to establish session cookies (more natural)
+        await page.goto("https://www.google.com", { waitUntil: "domcontentloaded", timeout: 10_000 });
+        // Accept consent dialog if shown
+        const consentBtn = await page.$('button[id="L2AGLb"], button:has-text("Accept all")');
+        if (consentBtn) {
+            await consentBtn.click().catch(() => {});
+            await page.waitForTimeout(500);
+        }
+
+        // Type query in search box like a real user
+        const searchBox = await page.$('textarea[name="q"], input[name="q"]');
+        if (searchBox) {
+            await searchBox.click();
+            await page.waitForTimeout(200);
+            await page.keyboard.type(query, { delay: 30 + Math.random() * 50 });
+            await page.waitForTimeout(300);
+            await page.keyboard.press("Enter");
+        } else {
+            // Fallback: navigate directly
+            await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 15_000 });
+        }
+
+        // Handle Google /sorry CAPTCHA page (rate limit reCAPTCHA)
+        await page.waitForTimeout(1500);
+        if (page.url().includes("/sorry")) {
+            console.error("[MCP] Google served /sorry CAPTCHA page, attempting to solve...");
+            const solved = await solveGoogleSorryPage(page);
+            if (!solved) throw new Error("CAPTCHA_UNSOLVED: Google /sorry page could not be bypassed");
+        }
+
+        // Wait for search results to render (h3 tags appear in result links)
+        await page.waitForSelector("h3", { timeout: 10_000 }).catch(() => {});
+        await page.waitForTimeout(500);
+
+        const html = await page.content();
+        const results = parseGoogleHtmlSearchResults(html, limit);
+        return results;
+    } finally {
+        await context.close();
+    }
+}
+
+// solveGoogleSorryPage is imported from recaptcha-vision.ts
+// It handles: checkbox click → audio challenge (Whisper) → image grid (CLIP vision)
+
+/** Close the shared Google browser (call on shutdown). */
+export async function closeGoogleBrowser(): Promise<void> {
+    if (_googleBrowser) {
+        await _googleBrowser.close().catch(() => {});
+        _googleBrowser = null;
+    }
+}
+
 export async function directSearchEngine(
     engine: string,
     query: string,
@@ -97,6 +313,12 @@ export async function directSearchEngine(
 
     let searchUrl: string;
     let parser: (html: string, limit: number) => DirectSearchResult[];
+
+    // Google requires JS rendering — use Playwright browser
+    if (engine === "google") {
+        await engineDelay(engine);
+        return browserSearchGoogle(query, limit, safeSearch, locale);
+    }
 
     switch (engine) {
         case "duckduckgo":
@@ -111,10 +333,6 @@ export async function directSearchEngine(
             searchUrl = buildYahooSearchUrl({ query, safeSearch: ss, locale: loc });
             parser = parseYahooSearchResults;
             break;
-        case "google":
-            searchUrl = buildGoogleHtmlSearchUrl({ query, safeSearch: ss, locale: loc });
-            parser = parseGoogleHtmlSearchResults;
-            break;
         case "brave":
             searchUrl = buildBraveHtmlSearchUrl({ query, safeSearch: ss, locale: loc });
             parser = parseBraveHtmlSearchResults;
@@ -123,8 +341,12 @@ export async function directSearchEngine(
             return [];
     }
 
+    // Enforce per-engine request spacing to avoid rate limits
+    await engineDelay(engine);
+
     const ua = getRandomUA();
     const headers = getStealthHeaders(engine, ua);
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 12000);
 
@@ -137,11 +359,36 @@ export async function directSearchEngine(
         clearTimeout(timeoutId);
         if (!res.ok) throw new Error(`HTTP_${res.status}`);
         const html = await res.text();
+
+        // Detect challenge/CAPTCHA pages in search results
+        if (isChallengePage(html)) {
+            throw new Error("CHALLENGE_DETECTED: Search engine returned a challenge page");
+        }
+
         return parser(html, limit);
     } catch (err) {
         clearTimeout(timeoutId);
         throw err;
     }
+}
+
+function isChallengePage(html: string): boolean {
+    // Detect Google JS-only shell (no real content, just a script loader)
+    if (html.includes("httpservice/retry/enablejs") && !html.includes("<h3")) {
+        return true;
+    }
+    const markers = [
+        "cf-browser-verification",
+        "cf_chl_opt",
+        "geo.captcha-delivery.com",
+        "g-recaptcha",
+        "h-captcha",
+        "challenges.cloudflare.com",
+    ];
+    const lower = html.toLowerCase();
+    // Only flag as challenge if the page is small (real search results are large)
+    if (html.length > 20_000) return false;
+    return markers.some((m) => lower.includes(m));
 }
 
 export function getCuratedFallback(query: string): EnrichedResult[] {
@@ -452,7 +699,7 @@ export async function federatedSearch(
 
     if (allResults.length === 0 && enginesFailed.length > 0) {
         console.error("[MCP] All API-based engines failed, trying direct HTTP search...");
-        const directEngines: readonly string[] = ["duckduckgo", "brave", "bing", "google"];
+        const directEngines: readonly string[] = ["duckduckgo", "brave", "bing", "yahoo", "google"];
         for (const dEngine of directEngines) {
             if (allResults.length >= limit) break;
             const dt = Date.now();

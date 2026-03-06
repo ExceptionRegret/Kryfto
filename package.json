@@ -18,11 +18,14 @@
     "version:check": "node scripts/check-version.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "changeset publish"
+    "release": "changeset publish",
+    "test:coverage": "pnpm -r --filter @kryfto/mcp-server --filter @kryfto/shared exec vitest run --coverage"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@vitest/coverage-v8": "^2.1.4",
+    "tsx": "^4.21.0",
     "vitest": "^2.1.4"
   },
   "pnpm": {

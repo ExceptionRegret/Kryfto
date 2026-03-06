@@ -19,6 +19,9 @@ export const pool = new Pool({
   user: POSTGRES_USER,
   password: POSTGRES_PASSWORD,
   max: Number(process.env.PG_POOL_MAX ?? 20),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  allowExitOnIdle: true,
 });
 
 export const db = drizzle(pool, { schema });

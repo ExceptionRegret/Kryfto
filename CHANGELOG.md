@@ -4,7 +4,56 @@ All notable changes to Kryfto are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [3.5.0] — Zero Any, Full Type Safety (Latest)
+## [3.6.0] — CLIP Vision CAPTCHA Solving & Release Infrastructure (Latest)
+
+_CLIP-large image classification · hCaptcha game detection · Coverage reporting · GitHub releases · NPM publish pipeline · README audit_
+
+### Added
+- **CLIP Vision CAPTCHA Solver**: `clip-vit-large-patch14` (~900MB) for reCAPTCHA/hCaptcha image grid challenges. Zero-shot classification with label synonyms, multi-language translation (DE/FR), 19 negative labels, adaptive threshold (>0.20), up to 8 solving rounds.
+- **hCaptcha Game Type Detection**: `detectHcaptchaGameType()` identifies unsolvable canvas games (penguin road, dice, jigsaw, etc.) and skips them, refreshing for solvable image grids instead.
+- **Google /sorry Page Solver** (`recaptcha-vision.ts`): 3-layer solver for Google rate-limit pages — checkbox click, audio (Whisper), then CLIP vision. No external APIs.
+- **Test Coverage Reporting**: `@vitest/coverage-v8` integrated; `pnpm test:coverage` reports per-file coverage for mcp-server and shared packages. CI now runs coverage by default.
+- **GitHub Issue Templates**: Bug report and feature request templates in `.github/ISSUE_TEMPLATE/`.
+- **CI Badges**: CI status, license, Node.js version, and MCP tool count badges in README.
+
+### Changed
+- **Changesets `access: public`**: NPM packages now publish as public scoped packages via `changesets/action`.
+- **UA Pool**: Firefox/Safari UAs removed — 12 Chromium-only UAs (Chrome 130–133, Edge 131/133) to prevent fingerprint mismatches.
+- **MCP Server tsconfig**: Added `"lib": ["DOM"]` for Playwright `page.evaluate()` DOM references in `recaptcha-vision.ts`.
+- **README Audit**: Updated stealth descriptions, UA counts, Google CAPTCHA notes, added fingerprint consistency and 20-point evasion documentation.
+- **CONTRIBUTING.md**: Enhanced with project structure, code standards, and detailed PR checklist.
+- **4x4 Dynamic Grid Re-check**: reCAPTCHA solver re-classifies refreshed tiles after initial clicks on dynamic grids.
+- **Audio Fallback**: Automatically switches to audio challenge after 2 blank CLIP classification rounds.
+
+### Fixed
+- **`turndown.remove()` SVG type**: FilterFunction cast for SVG tag removal when DOM lib is included.
+- **hCaptcha auto-submit**: Checks solved state after drag before clicking submit button.
+
+## [3.5.1] — Anti-Bot Engine & Browser-Based CAPTCHA Solving
+
+_Humanized interactions · Browser session pool · Local CAPTCHA solving · Cloudflare/Datadome bypass · Google search hardening_
+
+### Added
+- **Humanized Browser Interactions** (`apps/worker/src/humanize.ts`): Bezier curve mouse movements with random jitter, realistic typing with per-character delays and occasional typos + backspace, smooth chunked scrolling with reading pauses. Replaces robotic `page.click()`/`page.fill()`/`scrollBy` calls.
+- **Browser Session Pool** (`apps/worker/src/browser-pool.ts`): Per-domain persistent browser context reuse to avoid repeated Cloudflare challenges on subsequent requests. 30-minute idle TTL, max 10 entries, automatic eviction.
+- **Browser-Based CAPTCHA Solver** (`apps/worker/src/captcha-solver.ts`): Detects and solves Cloudflare Turnstile, reCAPTCHA v2, hCaptcha, Cloudflare JS/managed challenges, and Datadome press-and-hold + slider — all without external paid APIs.
+- **Local Whisper Transcription**: reCAPTCHA/hCaptcha audio challenge pipeline downloads MP3, transcribes locally via `@xenova/transformers` (ONNX Whisper model), and types the answer. No 2Captcha/CapSolver API keys required.
+- **Datadome Solver**: Press-and-hold with eased deceleration + slider drag solving for Datadome-protected pages.
+- **Challenge Detection in HTTP Search**: `isChallengePage()` detects Cloudflare/Datadome/reCAPTCHA/hCaptcha markers in small response pages and triggers engine fallback.
+- **Google Consent Cookie**: `getGoogleConsentCookieHeader()` injects SOCS consent cookie to bypass EU interstitial pages.
+- **E2E CAPTCHA Test Suite** (`apps/worker/src/test-captcha.ts`): Tests against real CAPTCHA demo pages (Turnstile, reCAPTCHA v2, hCaptcha, nowsecure.nl, intoli fingerprint).
+- **`@xenova/transformers` dependency**: Added to worker for local speech-to-text transcription.
+
+### Changed
+- **Google request delays increased**: 800–1500ms → 1500–3000ms to reduce blocking.
+- **Worker `runBrowserStep()`**: Click, type, scroll, and paginate now use humanized versions when `KRYFTO_HUMANIZE=true` (default).
+- **Worker `runBrowser()`**: Uses browser pool for session reuse when `KRYFTO_BROWSER_POOL=true` (default). Adds automatic challenge detection after navigation steps.
+- **MCP search `directSearchEngine()`**: Now calls `engineDelay()` before requests and adds Cookie header for Google.
+
+### Fixed
+- **hCaptcha misdetection**: Detection now checks iframe URLs (not just page HTML) and prioritizes hCaptcha before reCAPTCHA to prevent misidentification on hCaptcha pages that include Google scripts.
+
+## [3.5.0] — Zero Any, Full Type Safety
 
 _Complete type safety · Input sanitization · Expanded test coverage · Stealth hardening · Health check tool_
 

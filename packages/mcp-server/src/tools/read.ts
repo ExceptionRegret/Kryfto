@@ -31,17 +31,10 @@ const turndown = new TurndownService({
     bulletListMarker: "-",
 });
 turndown.use(gfm);
-turndown.remove([
-    "script",
-    "style",
-    "nav",
-    "footer",
-    "header",
-    "aside",
-    "noscript",
-    "iframe",
-    "svg",
-]);
+turndown.remove(((node: HTMLElement) =>
+    ["SCRIPT", "STYLE", "NAV", "FOOTER", "HEADER", "ASIDE", "NOSCRIPT", "IFRAME", "SVG"]
+        .includes(node.tagName)
+) as TurndownService.Filter);
 
 export async function readUrl(
     url: string,

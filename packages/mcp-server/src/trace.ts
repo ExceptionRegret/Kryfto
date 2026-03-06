@@ -2,6 +2,8 @@
 
 import { randomUUID } from "node:crypto";
 
+const spanParents = new WeakMap<TraceSpan, TraceSpan>();
+
 export interface TraceSpan {
   spanId: string;
   operation: string;
@@ -52,19 +54,17 @@ export function startSpan(
   ctx.currentSpan.children.push(span);
   const parentSpan = ctx.currentSpan;
   ctx.currentSpan = span;
-  // Store parent ref in metadata for restoration
-  (span as any)._parent = parentSpan;
+  spanParents.set(span, parentSpan);
   return span;
 }
 
 export function endSpan(ctx: TraceContext, span: TraceSpan): void {
   span.endMs = Date.now();
   span.durationMs = span.endMs - span.startMs;
-  // Restore parent as current span
-  const parent = (span as any)._parent;
+  const parent = spanParents.get(span);
   if (parent) {
     ctx.currentSpan = parent;
-    delete (span as any)._parent;
+    spanParents.delete(span);
   }
 }
 

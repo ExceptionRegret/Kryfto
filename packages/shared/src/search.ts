@@ -203,12 +203,9 @@ export function buildGoogleHtmlSearchUrl(params: {
   url.searchParams.set("hl", localeParts.language);
   url.searchParams.set("gl", localeParts.region);
   url.searchParams.set("safe", safeSearchToGoogle(params.safeSearch));
-  url.searchParams.set("gbv", "1");
-  // #11: Anti-bot hardening — disable auto-correction, request 10 results,
-  // request basic HTML mode to reduce JS-rendered pages
-  url.searchParams.set("nfpr", "1");
+  // Minimal params — gbv=1 is a known scraper fingerprint, omit it.
+  // Google now requires JS execution anyway (results rendered client-side).
   url.searchParams.set("num", "10");
-  url.searchParams.set("filter", "0");
   return url.toString();
 }
 

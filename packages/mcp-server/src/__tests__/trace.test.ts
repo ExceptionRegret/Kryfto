@@ -47,8 +47,9 @@ describe("trace", () => {
     const result = finalizeTrace(ctx);
     expect(result.traceId).toBeTruthy();
     expect(result.totalDurationMs).toBeGreaterThanOrEqual(0);
-    expect((result.spans as any).operation).toBe("root");
-    expect((result.spans as any).children).toHaveLength(1);
+    const spans = result.spans as Record<string, unknown>;
+    expect(spans.operation).toBe("root");
+    expect(spans.children).toHaveLength(1);
   });
 
   it("serializes span metadata", () => {
@@ -57,8 +58,8 @@ describe("trace", () => {
     endSpan(ctx, span);
 
     const result = finalizeTrace(ctx);
-    const rootSpan = result.spans as any;
-    expect(rootSpan.children[0].metadata).toEqual({
+    const rootSpan = result.spans as Record<string, unknown>;
+    expect((rootSpan.children as Record<string, unknown>[])[0]!.metadata).toEqual({
       engine: "bing",
       count: 5,
     });

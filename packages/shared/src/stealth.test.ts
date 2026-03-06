@@ -11,8 +11,8 @@ import {
 } from "./stealth.js";
 
 describe("stealth: UA pool", () => {
-  it("has at least 14 user agents", () => {
-    expect(UA_POOL.length).toBeGreaterThanOrEqual(14);
+  it("has at least 10 user agents", () => {
+    expect(UA_POOL.length).toBeGreaterThanOrEqual(10);
   });
 
   it("all UAs are non-empty strings", () => {

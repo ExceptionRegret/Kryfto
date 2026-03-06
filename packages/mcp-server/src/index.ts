@@ -568,6 +568,15 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Cleanup Playwright browser on shutdown
+  const shutdown = async () => {
+    const { closeGoogleBrowser } = await import("./tools/search.js");
+    await closeGoogleBrowser();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((e) => {

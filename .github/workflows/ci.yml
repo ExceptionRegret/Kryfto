@@ -32,8 +32,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit tests
-        run: pnpm test:unit
+      - name: Unit tests with coverage
+        run: pnpm test:coverage
 
       - name: Version consistency check
         run: pnpm version:check

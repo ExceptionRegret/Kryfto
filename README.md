@@ -4,7 +4,12 @@
 
   <h1>Kryfto</h1>
   <p><strong>The Production-Grade Browser Data Collection Runtime</strong></p>
-  
+
+  [![CI](https://github.com/kryfto/kryfto/actions/workflows/ci.yml/badge.svg)](https://github.com/kryfto/kryfto/actions/workflows/ci.yml)
+  [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+  [![Node.js 20+](https://img.shields.io/badge/node-20%2B-brightgreen.svg)]()
+  [![MCP Tools: 42+](https://img.shields.io/badge/MCP_Tools-42%2B-purple.svg)]()
+
   [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template)
   [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new)
   
@@ -18,7 +23,7 @@
 Kryfto is a comprehensive framework for automated data extraction, web crawling, and browser session execution.
 
 - **🤖 AI Agent Ready**: Ships with a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server exposing **42+ tools**. Instantly give Claude, Cursor, or Codex the ability to search, browse, extract, fact-check, run continuous research agents, and benchmark search quality on the live web.
-- **🕵️‍♂️ Advanced Stealth Engine**: Unified anti-bot layer (`stealth.ts`) with **16 rotated modern User-Agents** (Chrome 130–133, Firefox 133–134, Safari 18.3, Edge 131–133), per-browser `Sec-Ch-Ua` client hints, `Sec-Fetch-*` headers, browser-family-specific `Accept` strings, engine-appropriate `Referer` headers, per-engine request spacing delays, canvas fingerprint randomization, WebGL vendor/renderer spoofing, `navigator.platform` matching, `hardwareConcurrency` randomization, and an RFC 6265-compliant in-memory cookie jar with 30min TTL. These measures defeat basic bot detection; for sites running Cloudflare/DataDome, add residential proxies via `KRYFTO_PROXY_URLS`.
+- **🕵️‍♂️ Advanced Stealth & Anti-Bot Engine**: Unified anti-bot layer with **12 rotated modern User-Agents** (Chrome 130–133, Edge 131/133), per-browser `Sec-Ch-Ua` client hints, `Sec-Fetch-*` headers, Chromium-only `Accept` strings, engine-appropriate `Referer` headers, per-engine request spacing delays, canvas fingerprint randomization, WebGL vendor/renderer spoofing, `navigator.platform` matching, `hardwareConcurrency` randomization, WebRTC IP leak prevention, and an RFC 6265-compliant in-memory cookie jar with 30min TTL. **New in v3.5.1:** Consistent cross-signal fingerprints (UA matched to platform, screen, WebGL, fonts, and audio), 20-point browser evasion suite, humanized browser interactions (Bezier curve mouse movements with micro-overshoots, realistic typing with typos, smooth scrolling), per-domain browser session pool with 30min TTL, and browser-based CAPTCHA solving for Cloudflare Turnstile, reCAPTCHA v2, hCaptcha, and Datadome — all without external paid APIs. reCAPTCHA image grids are classified locally via CLIP vision (`clip-vit-large-patch14`), and audio challenges are transcribed locally via Whisper, both using `@xenova/transformers`.
 - **🛡️ Zero Trace Privacy**: Execute purely in-memory HTTP extractions wrapping our bot-evasion without persisting any telemetry or artifacts to the Postgres database.
 - **⚙️ Workflow Engine Native**: Fully documented OpenAPI spec makes it trivial to drop into `n8n`, Zapier, Make, or custom Python/TypeScript pipelines.
 - **☁️ Enterprise Infrastructure**: Backed by **Postgres** for persistence, **Redis + BullMQ** for reliable concurrent job queuing, and **MinIO/S3** for long-term artifact storage.
@@ -253,7 +258,7 @@ Traditional platforms force you to buy expensive **Google Custom Search** or **B
 
 You can instantly find leads or domains _without paying a cent in API credits_:
 
-- **Engines**: `duckduckgo`, `bing`, `yahoo`, `brave`, `google` _(Google requires API keys to bypass captchas rapidly, others do not)_.
+- **Engines**: `duckduckgo`, `bing`, `yahoo`, `brave`, `google` _(all engines work without external API keys — Google CAPTCHAs are solved locally via CLIP vision and Whisper audio)_.
 
 ---
 
@@ -354,18 +359,26 @@ Kryfto ships with a unified stealth layer (`packages/shared/src/stealth.ts`) des
 
 | Feature | Description |
 |---|---|
-| **User-Agent Rotation** | 16 modern UAs covering Chrome 130–133, Firefox 133–134, Safari 18.3, Edge 131–133 |
-| **Client Hints (`Sec-Ch-Ua`)** | Correct per-browser hints for Chrome/Edge (omitted for Firefox/Safari, matching real behavior) |
-| **Sec-Fetch Headers** | Full `Sec-Fetch-Dest/Mode/Site/User` set for Chromium/Firefox; minimal for Safari |
-| **Accept Headers** | Browser-family-specific (Chrome, Firefox, and Safari each send different Accept strings) |
+| **User-Agent Rotation** | 12 Chromium-only UAs covering Chrome 130–133 and Edge 131/133 (Firefox/Safari UAs removed to avoid fingerprint mismatches) |
+| **Client Hints (`Sec-Ch-Ua`)** | Correct per-browser hints for Chrome/Edge |
+| **Sec-Fetch Headers** | Full `Sec-Fetch-Dest/Mode/Site/User` set for all Chromium-based UAs |
+| **Accept Headers** | Chromium-standard Accept strings for all UAs |
 | **Referer** | Engine homepage injected automatically (e.g., `https://www.google.com/` for Google queries) |
-| **Request Spacing** | Per-engine delays: Google 800–1500ms, Bing/Yahoo 400–800ms, DDG 200–500ms, Brave 300–600ms |
+| **Request Spacing** | Per-engine delays: Google 1500–3000ms, Bing/Yahoo 400–800ms, DDG 200–500ms, Brave 300–600ms |
 | **Cookie Jar** | RFC 6265-compliant in-memory `Set-Cookie` persistence with Domain/Path/Secure/HttpOnly matching and 30min TTL |
 | **Platform Hints** | Derived from UA: Windows/macOS/Linux |
 | **Canvas Fingerprint** | Subtle pixel noise injected into `toDataURL`/`toBlob` to defeat canvas fingerprinting |
+| **Fingerprint Consistency** | UA, platform, screen resolution, WebGL vendor/renderer, fonts, and audio are cross-matched per profile |
+| **20-Point Browser Evasion** | webdriver, plugins, mimeTypes, platform, languages, deviceMemory, connection/Battery APIs, screen props, chrome runtime, permissions, canvas noise, WebGL, AudioContext, WebRTC leak prevention, iframe patches, CDP filtering, headless patches, timing noise, hasFocus, font defense |
 | **WebGL Spoofing** | Reports "Intel Inc." / "Intel Iris OpenGL Engine" instead of headless renderer |
 | **Hardware Concurrency** | Randomized from realistic values (4, 6, 8, 10, 12, 16) |
 | **navigator.webdriver** | Patched to `false` in Playwright browser contexts |
+| **Humanized Interactions** | Bezier curve mouse movements, realistic typing with typos + backspace, smooth chunked scrolling |
+| **Browser Session Pool** | Per-domain context reuse with 30min TTL — avoids repeated challenges on subsequent requests |
+| **CAPTCHA Solver** | Browser-based solving for Turnstile, reCAPTCHA v2, hCaptcha, Datadome (no external API keys) |
+| **CLIP Vision Classifier** | Local CLIP (`clip-vit-large-patch14`) via `@xenova/transformers` for reCAPTCHA/hCaptcha image grid challenges |
+| **Audio Transcription** | Local Whisper via `@xenova/transformers` for reCAPTCHA/hCaptcha audio challenges (fallback) |
+| **Google Consent Cookie** | SOCS cookie injection to bypass EU consent interstitials |
 
 ### Optional Proxy Configuration
 

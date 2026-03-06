@@ -48,11 +48,16 @@ import { buildStepPlan } from "./step-runner.js";
 import {
   applyStealthScripts,
   getStealthContextOptions,
+  getStealthContextWithFingerprint,
   launchStealthBrowser,
   parseProxyUrls,
   pickRandom,
   type StealthOptions,
+  type FingerprintProfile,
 } from "./stealth.js";
+import { humanClick, humanType, humanScroll, humanPaginateClick, idleFidget } from "./humanize.js";
+import { BrowserPool } from "./browser-pool.js";
+import { detectChallenge, handleChallenge, type ChallengeResult } from "./captcha-solver.js";
 
 type JobState =
   | "queued"
@@ -99,12 +104,17 @@ const STEALTH_ENABLED =
 const ROTATE_UA =
   String(process.env.KRYFTO_ROTATE_USER_AGENT ?? "true") === "true";
 const PROXY_URLS = parseProxyUrls(process.env.KRYFTO_PROXY_URLS);
+const HUMANIZE_ENABLED =
+  String(process.env.KRYFTO_HUMANIZE ?? "true") === "true";
+const BROWSER_POOL_ENABLED =
+  String(process.env.KRYFTO_BROWSER_POOL ?? "true") === "true";
 const stealthOpts: StealthOptions = {
   stealthEnabled: STEALTH_ENABLED,
   rotateUserAgent: ROTATE_UA,
   proxyUrls: PROXY_URLS,
   headless: true,
 };
+const browserPool = BROWSER_POOL_ENABLED ? new BrowserPool() : null;
 
 const storage = new ArtifactStorage(defaultArtifactConfigFromEnv());
 const redis = new Redis(REDIS_PORT, REDIS_HOST, {
@@ -428,18 +438,30 @@ async function runBrowserStep(
       });
       return;
     case "click":
-      await page.click(step.args.selector);
+      if (HUMANIZE_ENABLED) {
+        await humanClick(page, step.args.selector);
+      } else {
+        await page.click(step.args.selector);
+      }
       return;
     case "type":
-      await page.fill(step.args.selector, step.args.text);
+      if (HUMANIZE_ENABLED) {
+        await humanType(page, step.args.selector, step.args.text);
+      } else {
+        await page.fill(step.args.selector, step.args.text);
+      }
       return;
     case "scroll": {
-      const delta =
-        step.args.direction === "down" ? step.args.amount : -step.args.amount;
-      await page.evaluate(
-        (value) => window.scrollBy(0, value),
-        delta
-      );
+      if (HUMANIZE_ENABLED) {
+        await humanScroll(page, step.args.direction, step.args.amount);
+      } else {
+        const delta =
+          step.args.direction === "down" ? step.args.amount : -step.args.amount;
+        await page.evaluate(
+          (value) => window.scrollBy(0, value),
+          delta
+        );
+      }
       return;
     }
     case "wait":
@@ -454,7 +476,11 @@ async function runBrowserStep(
       const maxPages = step.args.maxPages ?? 10;
       for (let i = 0; i < maxPages; i += 1) {
         if (!(await page.isVisible(step.args.nextSelector))) break;
-        await page.click(step.args.nextSelector);
+        if (HUMANIZE_ENABLED) {
+          await humanPaginateClick(page, step.args.nextSelector);
+        } else {
+          await page.click(step.args.nextSelector);
+        }
         await page.waitForLoadState("networkidle", { timeout: 30_000 });
         if (step.args.stopCondition) {
           const html = await page.content();
@@ -500,6 +526,7 @@ async function runBrowser(
   networkErrors: Array<{ url: string; errorText: string }>;
   timings: Array<{ step: string; durationMs: number }>;
   harBytes: Buffer | null;
+  challengeResult: ChallengeResult | undefined;
 }> {
   const profileName = new URL(request.url).hostname;
   const harPath = path.join(os.tmpdir(), `${jobId}.har`);
@@ -511,16 +538,38 @@ async function runBrowser(
     ...stealthOpts,
     headless: isHeadless,
   };
-  const browser: Browser = await launchStealthBrowser(
-    browserType,
-    currentStealthOpts
-  );
 
-  const stealthCtx = getStealthContextOptions(currentStealthOpts);
-  const context = await browser.newContext({
-    recordHar: { path: harPath },
-    ...stealthCtx,
-  });
+  let browser: Browser;
+  let context: BrowserContext;
+  let poolManaged = false;
+  let fingerprint: FingerprintProfile | undefined;
+
+  // Try browser pool first for session reuse
+  if (browserPool && !request.options.interactiveLogin) {
+    const poolResult = await browserPool.acquire(profileName, browserType, currentStealthOpts);
+    browser = poolResult.browser;
+    fingerprint = poolResult.fingerprint;
+    if (poolResult.reused) {
+      context = poolResult.context;
+      poolManaged = true;
+      logger.debug({ domain: profileName }, "Reusing pooled browser session");
+    } else {
+      context = await browser.newContext({
+        recordHar: { path: harPath },
+        ...poolResult.stealthCtxOpts,
+      });
+      poolManaged = true;
+    }
+  } else {
+    browser = await launchStealthBrowser(browserType, currentStealthOpts);
+    const { contextOpts, fingerprint: fp } = getStealthContextWithFingerprint(currentStealthOpts);
+    fingerprint = fp;
+    context = await browser.newContext({
+      recordHar: { path: harPath },
+      ...contextOpts,
+    });
+  }
+
   const previousCookies = await loadProfileCookies(projectId, profileName);
   if (previousCookies?.length) {
     await context.addCookies(toPlaywrightCookies(previousCookies));
@@ -528,7 +577,7 @@ async function runBrowser(
 
   const page = await context.newPage();
   if (currentStealthOpts.stealthEnabled) {
-    await applyStealthScripts(page);
+    await applyStealthScripts(page, fingerprint);
   }
   const consoleLogs: Array<{ type: string; text: string }> = [];
   const networkErrors: Array<{ url: string; errorText: string }> = [];
@@ -536,6 +585,7 @@ async function runBrowser(
   const extracted = { value: null as unknown };
   const cookies = { value: null as unknown };
   const timings: Array<{ step: string; durationMs: number }> = [];
+  let challengeResult: ChallengeResult | undefined;
 
   page.on("console", (msg) => {
     consoleLogs.push({ type: msg.type(), text: msg.text() });
@@ -567,6 +617,30 @@ async function runBrowser(
           cookies
         );
         timings.push({ step: step.type, durationMs: Date.now() - start });
+
+        // After navigation steps, check for challenges
+        if (step.type === "goto" || step.type === "waitForNetworkIdle") {
+          // Small idle fidget while page loads (looks natural)
+          if (HUMANIZE_ENABLED) {
+            await idleFidget(page, Math.floor(300 + Math.random() * 500));
+          }
+          const challengeStart = Date.now();
+          challengeResult = await handleChallenge(page);
+          if (challengeResult.challenged) {
+            timings.push({ step: "challenge_handling", durationMs: Date.now() - challengeStart });
+            await logJob(jobId, projectId, challengeResult.solved ? "info" : "warn",
+              `Challenge detected: ${challengeResult.challengeType}, solved: ${challengeResult.solved}, method: ${challengeResult.method}`,
+              { challengeResult: challengeResult as unknown as Record<string, unknown> }
+            );
+            // Report challenge to pool for identity rotation tracking
+            if (browserPool && poolManaged && !challengeResult.solved) {
+              const rotated = await browserPool.reportChallenge(profileName);
+              if (rotated) {
+                logger.info({ domain: profileName }, "Identity rotated after repeated challenges");
+              }
+            }
+          }
+        }
       } finally {
         span.end();
       }
@@ -575,12 +649,24 @@ async function runBrowser(
 
   const html = await page.content();
 
+  // Save cookies for session reuse
+  const contextCookies = await context.cookies();
   if (request.options.interactiveLogin) {
-    await saveProfileCookies(projectId, profileName, await context.cookies());
+    await saveProfileCookies(projectId, profileName, contextCookies);
+  }
+  // Always save cookies when challenge was solved (for future session reuse)
+  if (challengeResult?.solved && challengeResult.challenged) {
+    await saveProfileCookies(projectId, profileName, contextCookies);
   }
 
-  await context.close();
-  await browser.close();
+  // Close page but keep context alive in pool
+  await page.close();
+  if (poolManaged && browserPool) {
+    browserPool.release(profileName);
+  } else {
+    await context.close();
+    await browser.close();
+  }
 
   let harBytes: Buffer | null = null;
   try {
@@ -600,6 +686,7 @@ async function runBrowser(
     networkErrors,
     timings,
     harBytes,
+    challengeResult,
   };
 }
 
@@ -1113,6 +1200,7 @@ async function shutdown(signal: string) {
     crawlWorker.close(),
     deadLetterQueue.close(),
     jobsQueue.close(),
+    browserPool?.closeAll(),
     redis.quit(),
     pgPool.end(),
   ]);

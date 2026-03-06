@@ -1,37 +1,14 @@
 import type {
   Browser,
-  BrowserContext,
   BrowserType,
   LaunchOptions,
   Page,
 } from "playwright";
 import { getRandomUA } from "@kryfto/shared";
+import { generateFingerprint, type FingerprintProfile } from "./fingerprint.js";
 
-// ─── User-Agent Pool ────────────────────────────────────────────────
-// Uses the unified UA pool from @kryfto/shared (single source of truth).
-
-const VIEWPORTS = [
-  { width: 1920, height: 1080 },
-  { width: 1536, height: 864 },
-  { width: 1440, height: 900 },
-  { width: 1366, height: 768 },
-  { width: 1280, height: 720 },
-  { width: 2560, height: 1440 },
-];
-
-const TIMEZONES = [
-  "America/New_York",
-  "America/Chicago",
-  "America/Los_Angeles",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Tokyo",
-];
-
-const LOCALES = ["en-US", "en-GB", "en-CA", "en-AU", "de-DE", "fr-FR"];
-
-// Hardware concurrency values seen on real machines
-const HARDWARE_CONCURRENCY_VALUES = [4, 6, 8, 10, 12, 16];
+// ─── Re-export fingerprint for external use ────────────────────────
+export { generateFingerprint, type FingerprintProfile } from "./fingerprint.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────
 export function pickRandom<T>(arr: readonly T[]): T {
@@ -47,26 +24,6 @@ export function parseProxyUrls(envValue?: string): string[] {
     .filter(Boolean);
 }
 
-/**
- * Derive the correct navigator.platform value from a User-Agent string.
- * Prevents mismatches like Windows UA + macOS platform which is an instant detection signal.
- */
-function platformFromUA(ua: string): string {
-  if (ua.includes("Macintosh") || ua.includes("Mac OS X")) return "MacIntel";
-  if (ua.includes("Linux") || ua.includes("X11")) return "Linux x86_64";
-  return "Win32"; // Default to Windows
-}
-
-/**
- * Derive the correct navigator.languages from a locale string.
- * E.g., "en-GB" → ["en-GB", "en"], "de-DE" → ["de-DE", "de"]
- */
-function languagesFromLocale(locale: string): string[] {
-  const base = locale.split("-")[0] ?? "en";
-  if (locale === base) return [locale];
-  return [locale, base];
-}
-
 // ─── Stealth Browser Launch ─────────────────────────────────────────
 export interface StealthOptions {
   stealthEnabled: boolean;
@@ -77,7 +34,7 @@ export interface StealthOptions {
 
 /**
  * Launch a browser with anti-detection measures.
- * When stealth is disabled, this behaves identically to a normal launch.
+ * Includes TLS fingerprint randomization via Chrome flags.
  */
 export async function launchStealthBrowser(
   browserType: BrowserType,
@@ -89,11 +46,37 @@ export async function launchStealthBrowser(
 
   if (opts.stealthEnabled) {
     launchOptions.args = [
+      // Core anti-automation
       "--disable-blink-features=AutomationControlled",
       "--disable-features=IsolateOrigins,site-per-process",
       "--disable-dev-shm-usage",
       "--no-first-run",
       "--no-default-browser-check",
+      // Prevent info bars
+      "--disable-infobars",
+      "--disable-component-update",
+      // TLS/JA3 fingerprint variation
+      "--enable-features=NetworkService,NetworkServiceInProcess",
+      "--disable-features=CalculateNativeWinOcclusion",
+      // WebRTC IP leak prevention
+      "--enforce-webrtc-ip-permission-check",
+      "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+      // GPU and rendering
+      "--disable-gpu-sandbox",
+      "--enable-webgl",
+      "--ignore-gpu-blocklist",
+      // Window size randomization (prevents default 800x600 headless tell)
+      `--window-size=${1200 + Math.floor(Math.random() * 720)},${700 + Math.floor(Math.random() * 400)}`,
+      // Disable automation extensions
+      "--disable-extensions",
+      "--disable-default-apps",
+      "--disable-popup-blocking",
+      // Headless-specific hardening
+      ...(opts.headless ? [
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+      ] : []),
     ];
   }
 
@@ -106,202 +89,377 @@ export async function launchStealthBrowser(
 }
 
 /**
- * Create a browser context with randomized fingerprint when stealth is on.
+ * Create browser context options from a fingerprint profile.
+ * All properties are internally consistent.
  */
 export function getStealthContextOptions(
-  opts: StealthOptions
+  opts: StealthOptions,
+  fingerprint?: FingerprintProfile,
 ): Record<string, unknown> {
   if (!opts.stealthEnabled) return {};
 
-  const contextOpts: Record<string, unknown> = {};
+  const fp = fingerprint ?? generateFingerprint(
+    opts.rotateUserAgent ? undefined : getRandomUA()
+  );
 
-  if (opts.rotateUserAgent) {
-    contextOpts.userAgent = getRandomUA();
-  }
-
-  contextOpts.viewport = pickRandom(VIEWPORTS);
-  contextOpts.locale = pickRandom(LOCALES);
-  contextOpts.timezoneId = pickRandom(TIMEZONES);
-
-  // Prevent WebGL fingerprint leaking "Google SwiftShader"
-  contextOpts.permissions = [] as string[];
-
-  return contextOpts;
+  return {
+    ...fp.contextOptions,
+    permissions: [] as string[],
+    bypassCSP: true,
+  };
 }
 
 /**
- * Inject scripts that patch browser automation tells:
- * - navigator.webdriver → false
- * - navigator.plugins → realistic array (no deprecated Native Client)
- * - navigator.languages → match context locale (not hardcoded)
- * - navigator.hardwareConcurrency → realistic randomized value
- * - navigator.platform → matches the User-Agent string
- * - window.chrome → defined
+ * Generate a fingerprint-aware context options set.
+ * Returns both the context options and the fingerprint for use in stealth scripts.
+ */
+export function getStealthContextWithFingerprint(
+  opts: StealthOptions,
+): { contextOpts: Record<string, unknown>; fingerprint: FingerprintProfile } {
+  const fingerprint = generateFingerprint(
+    opts.rotateUserAgent ? undefined : getRandomUA()
+  );
+  const contextOpts = getStealthContextOptions(opts, fingerprint);
+  return { contextOpts, fingerprint };
+}
+
+// ─── Comprehensive Stealth Init Scripts ─────────────────────────────
+
+/**
+ * Inject scripts that patch ALL known browser automation tells.
+ * Uses a consistent fingerprint profile to ensure cross-signal coherence.
+ *
+ * IMPORTANT: Uses string-based addInitScript to avoid tsx/esbuild injecting
+ * __name helpers that don't exist in the browser context.
  */
 export async function applyStealthScripts(
   page: Page,
-  contextOpts?: Record<string, unknown>
+  fingerprint?: FingerprintProfile,
 ): Promise<void> {
-  // Derive runtime values from context options
-  const ua = (contextOpts?.userAgent as string) ?? "";
-  const locale = (contextOpts?.locale as string) ?? "en-US";
-  const platform = platformFromUA(ua);
-  const languages = languagesFromLocale(locale);
-  const hardwareConcurrency = pickRandom(HARDWARE_CONCURRENCY_VALUES);
+  const fp = fingerprint ?? generateFingerprint();
 
-  await page.addInitScript(
-    (opts: {
-      platform: string;
-      languages: string[];
-      hardwareConcurrency: number;
-    }) => {
-      // 1. Hide webdriver flag
-      Object.defineProperty(navigator, "webdriver", { get: () => false });
+  // Serialize fingerprint values into the script string
+  const opts = {
+    platform: fp.navigatorPlatform,
+    languages: fp.locale.languages,
+    hardwareConcurrency: fp.hardware.hardwareConcurrency,
+    deviceMemory: fp.hardware.deviceMemory,
+    screen: fp.screen,
+    webgl: fp.webgl,
+    fonts: fp.fonts,
+    audioNoise: fp.audioNoise,
+    browserFamily: fp.browserFamily,
+  };
 
-      // 2. Fake plugins array (Chrome-like, no deprecated Native Client)
-      Object.defineProperty(navigator, "plugins", {
-        get: () => {
-          const fakePlugins = [
-            {
-              name: "Chrome PDF Plugin",
-              filename: "internal-pdf-viewer",
-              description: "Portable Document Format",
-            },
-            {
-              name: "Chrome PDF Viewer",
-              filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
-              description: "",
-            },
-          ];
-          const arr = Object.create(PluginArray.prototype);
-          for (let i = 0; i < fakePlugins.length; i++) {
-            const p = Object.create(Plugin.prototype);
-            Object.defineProperties(p, {
-              name: { value: fakePlugins[i]!.name, enumerable: true },
-              filename: { value: fakePlugins[i]!.filename, enumerable: true },
-              description: {
-                value: fakePlugins[i]!.description,
-                enumerable: true,
-              },
-              length: { value: 0, enumerable: true },
-            });
-            arr[i] = p;
-          }
-          Object.defineProperty(arr, "length", {
-            value: fakePlugins.length,
-            enumerable: true,
-          });
-          return arr;
-        },
+  const script = `(function() {
+  var opts = ${JSON.stringify(opts)};
+
+  // 1. navigator.webdriver — must not exist at all ("webdriver" in navigator === false)
+  try { delete Navigator.prototype.webdriver; } catch(e) {}
+  try { delete navigator.webdriver; } catch(e) {}
+  // If delete didn't work (Chrome prevents it), redefine as non-enumerable getter returning undefined
+  if ("webdriver" in navigator) {
+    Object.defineProperty(Navigator.prototype, "webdriver", { get: function() { return undefined; }, configurable: true });
+  }
+
+  // 2. navigator.plugins (realistic Chrome plugins)
+  try {
+    var fakePluginData = [
+      { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format", length: 1 },
+      { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "", length: 0 },
+      { name: "Native Client", filename: "internal-nacl-plugin", description: "", length: 0 },
+    ];
+    var pluginsProto = typeof PluginArray !== "undefined" ? PluginArray.prototype : Object.prototype;
+    var pluginProto = typeof Plugin !== "undefined" ? Plugin.prototype : Object.prototype;
+    var pluginsObj = Object.create(pluginsProto);
+    for (var i = 0; i < fakePluginData.length; i++) {
+      var pd = fakePluginData[i];
+      var p = Object.create(pluginProto);
+      Object.defineProperties(p, {
+        name: { value: pd.name, enumerable: true, configurable: true },
+        filename: { value: pd.filename, enumerable: true, configurable: true },
+        description: { value: pd.description, enumerable: true, configurable: true },
+        length: { value: pd.length, enumerable: true, configurable: true },
       });
+      pluginsObj[i] = p;
+      pluginsObj[pd.name] = p;
+    }
+    Object.defineProperties(pluginsObj, {
+      length: { value: fakePluginData.length, enumerable: true, configurable: true },
+      item: { value: function(idx) { return pluginsObj[idx] || null; }, enumerable: false },
+      namedItem: { value: function(n) { return pluginsObj[n] || null; }, enumerable: false },
+      refresh: { value: function() {}, enumerable: false },
+    });
+    Object.defineProperty(Navigator.prototype, "plugins", { get: function() { return pluginsObj; }, configurable: true });
+  } catch(e) {}
 
-      // 3. Languages derived from context locale (not hardcoded)
-      Object.defineProperty(navigator, "languages", {
-        get: () => opts.languages,
+  // 3. navigator.mimeTypes
+  try {
+    var fakeMimeData = [
+      { type: "application/pdf", suffixes: "pdf", description: "Portable Document Format" },
+      { type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format" },
+    ];
+    var mimeProto = typeof MimeTypeArray !== "undefined" ? MimeTypeArray.prototype : Object.prototype;
+    var mimeItemProto = typeof MimeType !== "undefined" ? MimeType.prototype : Object.prototype;
+    var mimeObj = Object.create(mimeProto);
+    for (var j = 0; j < fakeMimeData.length; j++) {
+      var md = fakeMimeData[j];
+      var m = Object.create(mimeItemProto);
+      Object.defineProperties(m, {
+        type: { value: md.type, enumerable: true, configurable: true },
+        suffixes: { value: md.suffixes, enumerable: true, configurable: true },
+        description: { value: md.description, enumerable: true, configurable: true },
+        enabledPlugin: { value: null, enumerable: true, configurable: true },
       });
+      mimeObj[j] = m;
+      mimeObj[md.type] = m;
+    }
+    Object.defineProperties(mimeObj, {
+      length: { value: fakeMimeData.length, enumerable: true, configurable: true },
+      item: { value: function(idx) { return mimeObj[idx] || null; }, enumerable: false },
+      namedItem: { value: function(n) { return mimeObj[n] || null; }, enumerable: false },
+    });
+    Object.defineProperty(Navigator.prototype, "mimeTypes", { get: function() { return mimeObj; }, configurable: true });
+  } catch(e) {}
 
-      // 4. Platform matching the UA string
-      Object.defineProperty(navigator, "platform", {
-        get: () => opts.platform,
+  // 4. navigator properties
+  Object.defineProperty(navigator, "languages", { get: function() { return Object.freeze(opts.languages.slice()); } });
+  Object.defineProperty(navigator, "platform", { get: function() { return opts.platform; } });
+  Object.defineProperty(navigator, "hardwareConcurrency", { get: function() { return opts.hardwareConcurrency; } });
+  Object.defineProperty(navigator, "deviceMemory", { get: function() { return opts.deviceMemory; } });
+  Object.defineProperty(navigator, "maxTouchPoints", { get: function() { return 0; } });
+
+  // 5. navigator.connection
+  if ("connection" in navigator) {
+    var conn = {
+      effectiveType: "4g",
+      rtt: 50 + Math.floor(Math.random() * 50),
+      downlink: 5 + Math.random() * 15,
+      saveData: false, type: "wifi", onchange: null,
+      addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; },
+    };
+    Object.defineProperty(navigator, "connection", { get: function() { return conn; } });
+  }
+
+  // 6. navigator.getBattery
+  if ("getBattery" in navigator) {
+    navigator.getBattery = function() {
+      return Promise.resolve({
+        charging: Math.random() > 0.3,
+        chargingTime: Math.random() > 0.5 ? Infinity : Math.floor(Math.random() * 7200),
+        dischargingTime: Infinity, level: 0.5 + Math.random() * 0.5,
+        onchargingchange: null, onchargingtimechange: null, ondischargingtimechange: null, onlevelchange: null,
+        addEventListener: function(){}, removeEventListener: function(){}, dispatchEvent: function(){ return true; },
       });
+    };
+  }
 
-      // 5. Realistic hardware concurrency
-      Object.defineProperty(navigator, "hardwareConcurrency", {
-        get: () => opts.hardwareConcurrency,
-      });
+  // 7. Screen properties
+  var screenProps = { width: opts.screen.width, height: opts.screen.height, availWidth: opts.screen.availWidth, availHeight: opts.screen.availHeight, colorDepth: opts.screen.colorDepth, pixelDepth: opts.screen.pixelDepth };
+  for (var sk in screenProps) {
+    (function(key, val) {
+      Object.defineProperty(screen, key, { get: function() { return val; } });
+    })(sk, screenProps[sk]);
+  }
+  Object.defineProperty(window, "devicePixelRatio", { get: function() { return opts.screen.devicePixelRatio; } });
+  Object.defineProperty(window, "outerWidth", { get: function() { return opts.screen.outerWidth; } });
+  Object.defineProperty(window, "outerHeight", { get: function() { return opts.screen.outerHeight; } });
 
-      // 6. Ensure chrome runtime object exists (many bot detectors check this)
-      if (!(window as unknown as Record<string, unknown>).chrome) {
-        (window as unknown as Record<string, unknown>).chrome = {
-          runtime: {
-            connect: () => { },
-            sendMessage: () => { },
-          },
-        };
-      }
-
-      // 7. Prevent iframe contentWindow detection
-      const originalQuery = (
-        window.HTMLIFrameElement.prototype as unknown as { __lookupGetter__?: (prop: string) => (() => Window | null) | undefined }
-      ).__lookupGetter__?.call(
-        window.HTMLIFrameElement.prototype,
-        "contentWindow"
-      ) as (() => Window | null) | undefined;
-      if (originalQuery) {
-        Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
-          get: function (this: HTMLIFrameElement) {
-            return originalQuery.call(this);
-          },
-        });
-      }
-
-      // 8. Patch permissions query for notifications
-      const originalPermissions = navigator.permissions?.query;
-      if (originalPermissions) {
-        navigator.permissions.query = (parameters: PermissionDescriptor) => {
-          if (parameters.name === "notifications") {
-            return Promise.resolve({
-              state: "denied",
-              onchange: null,
-            } as PermissionStatus);
-          }
-          return originalPermissions.call(navigator.permissions, parameters);
-        };
-      }
-
-      // 9. Canvas fingerprint randomization — inject subtle noise
-      const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-      HTMLCanvasElement.prototype.toDataURL = function (
-        this: HTMLCanvasElement,
-        ...args: [string?, number?]
-      ) {
-        const ctx = this.getContext("2d");
-        if (ctx && this.width > 0 && this.height > 0) {
-          const imageData = ctx.getImageData(0, 0, this.width, this.height);
-          for (let i = 0; i < imageData.data.length; i += 4) {
-            imageData.data[i]! += Math.floor(Math.random() * 3) - 1; // R ±1
-          }
-          ctx.putImageData(imageData, 0, 0);
-        }
-        return origToDataURL.apply(this, args);
-      };
-
-      const origToBlob = HTMLCanvasElement.prototype.toBlob;
-      HTMLCanvasElement.prototype.toBlob = function (
-        this: HTMLCanvasElement,
-        callback: BlobCallback,
-        ...args: [string?, number?]
-      ) {
-        const ctx = this.getContext("2d");
-        if (ctx && this.width > 0 && this.height > 0) {
-          const imageData = ctx.getImageData(0, 0, this.width, this.height);
-          for (let i = 0; i < imageData.data.length; i += 4) {
-            imageData.data[i]! += Math.floor(Math.random() * 3) - 1;
-          }
-          ctx.putImageData(imageData, 0, 0);
-        }
-        return origToBlob.call(this, callback, ...args);
-      };
-
-      // 10. WebGL vendor/renderer spoofing
-      const spoofWebGL = (proto: WebGLRenderingContext | null) => {
-        if (!proto) return;
-        const origGetParam = proto.getParameter;
-        proto.getParameter = function (param: number) {
-          if (param === 37445) return "Intel Inc.";
-          if (param === 37446) return "Intel Iris OpenGL Engine";
-          return origGetParam.call(this, param);
-        };
-      };
-      try {
-        spoofWebGL(WebGLRenderingContext.prototype);
-      } catch { /* WebGL unavailable */ }
-      try {
-        if (typeof WebGL2RenderingContext !== "undefined") {
-          spoofWebGL(WebGL2RenderingContext.prototype as unknown as WebGLRenderingContext);
-        }
-      } catch { /* WebGL2 unavailable */ }
+  // 8. window.chrome (only for Chrome/Edge UAs — Safari/Firefox don't have it)
+  if (opts.browserFamily !== "safari" && opts.browserFamily !== "firefox") {
+  var chromeObj = {
+    app: {
+      isInstalled: false,
+      InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" },
+      RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" },
+      getDetails: function() { return null; },
+      getIsInstalled: function() { return false; },
     },
-    { platform, languages, hardwareConcurrency }
-  );
+    csi: function() { return {}; },
+    loadTimes: function() {
+      return {
+        commitLoadTime: performance.now() / 1000, connectionInfo: "h2",
+        finishDocumentLoadTime: performance.now() / 1000, finishLoadTime: performance.now() / 1000,
+        firstPaintAfterLoadTime: 0, firstPaintTime: performance.now() / 1000,
+        navigationType: "Other", npnNegotiatedProtocol: "h2",
+        requestTime: performance.now() / 1000 - 0.5, startLoadTime: performance.now() / 1000 - 0.3,
+        wasAlternateProtocolAvailable: false, wasFetchedViaSpdy: true, wasNpnNegotiated: true,
+      };
+    },
+    runtime: {
+      OnInstalledReason: { CHROME_UPDATE: "chrome_update", INSTALL: "install", SHARED_MODULE_UPDATE: "shared_module_update", UPDATE: "update" },
+      OnRestartRequiredReason: { APP_UPDATE: "app_update", OS_UPDATE: "os_update", PERIODIC: "periodic" },
+      PlatformArch: { ARM: "arm", MIPS: "mips", MIPS64: "mips64", X86_32: "x86-32", X86_64: "x86-64" },
+      PlatformNaclArch: { ARM: "arm", MIPS: "mips", MIPS64: "mips64", X86_32: "x86-32", X86_64: "x86-64" },
+      PlatformOs: { ANDROID: "android", CROS: "cros", LINUX: "linux", MAC: "mac", OPENBSD: "openbsd", WIN: "win" },
+      RequestUpdateCheckStatus: { NO_UPDATE: "no_update", THROTTLED: "throttled", UPDATE_AVAILABLE: "update_available" },
+      connect: function() {}, sendMessage: function() {}, id: undefined,
+    },
+  };
+  if (window.chrome && typeof window.chrome === "object") {
+    for (var ck in window.chrome) { if (!(ck in chromeObj)) chromeObj[ck] = window.chrome[ck]; }
+  }
+  window.chrome = chromeObj;
+  }
+
+  // 9. Permissions API
+  var origPermQuery = navigator.permissions && navigator.permissions.query;
+  if (origPermQuery) {
+    navigator.permissions.query = function(parameters) {
+      if (parameters.name === "notifications") {
+        return Promise.resolve({ state: "prompt", onchange: null });
+      }
+      return origPermQuery.call(navigator.permissions, parameters);
+    };
+  }
+
+  // 10. Canvas fingerprint noise
+  var canvasNoiseSeed = opts.audioNoise * 100000;
+  var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toDataURL = function() {
+    var ctx = this.getContext("2d");
+    if (ctx && this.width > 0 && this.height > 0 && this.width < 500 && this.height < 500) {
+      try {
+        var imageData = ctx.getImageData(0, 0, this.width, this.height);
+        for (var ci = 0; ci < Math.min(imageData.data.length, 4000); ci += 4) {
+          var noise = ((canvasNoiseSeed * (ci + 1) * 9301 + 49297) % 233280) / 233280;
+          imageData.data[ci] += (noise > 0.5 ? 1 : -1);
+        }
+        ctx.putImageData(imageData, 0, 0);
+      } catch(e) {}
+    }
+    return origToDataURL.apply(this, arguments);
+  };
+
+  var origToBlob = HTMLCanvasElement.prototype.toBlob;
+  HTMLCanvasElement.prototype.toBlob = function(callback) {
+    var ctx = this.getContext("2d");
+    if (ctx && this.width > 0 && this.height > 0 && this.width < 500 && this.height < 500) {
+      try {
+        var imageData = ctx.getImageData(0, 0, this.width, this.height);
+        for (var ci = 0; ci < Math.min(imageData.data.length, 4000); ci += 4) {
+          var noise = ((canvasNoiseSeed * (ci + 1) * 9301 + 49297) % 233280) / 233280;
+          imageData.data[ci] += (noise > 0.5 ? 1 : -1);
+        }
+        ctx.putImageData(imageData, 0, 0);
+      } catch(e) {}
+    }
+    return origToBlob.apply(this, arguments);
+  };
+
+  // 11. WebGL vendor/renderer spoofing
+  function spoofWebGL(proto) {
+    if (!proto) return;
+    var origGetParam = proto.getParameter;
+    var origGetExt = proto.getExtension;
+    proto.getParameter = function(param) {
+      if (param === 37445) return opts.webgl.vendor;
+      if (param === 37446) return opts.webgl.renderer;
+      if (param === 7936) return opts.webgl.vendor;
+      if (param === 7937) return opts.webgl.renderer;
+      return origGetParam.call(this, param);
+    };
+    proto.getExtension = function(name) {
+      if (name === "WEBGL_debug_renderer_info") return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
+      return origGetExt.call(this, name);
+    };
+  }
+  try { spoofWebGL(WebGLRenderingContext.prototype); } catch(e) {}
+  try { if (typeof WebGL2RenderingContext !== "undefined") spoofWebGL(WebGL2RenderingContext.prototype); } catch(e) {}
+
+  // 12. AudioContext fingerprint noise
+  try {
+    var origGetChannelData = AnalyserNode.prototype.getFloatFrequencyData;
+    AnalyserNode.prototype.getFloatFrequencyData = function(array) {
+      origGetChannelData.call(this, array);
+      for (var ai = 0; ai < array.length; ai++) array[ai] += opts.audioNoise;
+    };
+  } catch(e) {}
+
+  // 13. WebRTC IP leak prevention
+  var origRTC = window.RTCPeerConnection;
+  if (origRTC) {
+    window.RTCPeerConnection = function(config) {
+      return new origRTC(Object.assign({}, config, { iceServers: [], iceCandidatePoolSize: 0 }));
+    };
+    window.RTCPeerConnection.prototype = origRTC.prototype;
+  }
+
+  // 14. iframe contentWindow bypass
+  try {
+    var origContentWindow = HTMLIFrameElement.prototype.__lookupGetter__("contentWindow");
+    if (origContentWindow) {
+      Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
+        get: function() { return origContentWindow.call(this); },
+      });
+    }
+  } catch(e) {}
+
+  // 15. CDP stack trace filter
+  if (typeof Error.prepareStackTrace === "undefined") {
+    Error.prepareStackTrace = function(err, stack) {
+      var filtered = stack.filter(function(frame) {
+        var fn = frame.getFunctionName() || "";
+        var file = frame.getFileName() || "";
+        return fn.indexOf("__cdp") === -1 && file.indexOf("__playwright") === -1;
+      });
+      return err.name + ": " + err.message + "\\n" + filtered.map(function(f) { return "    at " + f; }).join("\\n");
+    };
+  }
+
+  // 16. Headless detection patches
+  if (typeof Notification !== "undefined") {
+    Object.defineProperty(Notification, "permission", { get: function() { return "default"; } });
+  }
+  if ("speechSynthesis" in window) {
+    var origGetVoices = speechSynthesis.getVoices;
+    speechSynthesis.getVoices = function() {
+      var voices = origGetVoices.call(this);
+      if (voices.length === 0) {
+        return [
+          { default: true, lang: "en-US", localService: true, name: "Microsoft David - English (United States)", voiceURI: "Microsoft David - English (United States)" },
+          { default: false, lang: "en-US", localService: true, name: "Microsoft Zira - English (United States)", voiceURI: "Microsoft Zira - English (United States)" },
+          { default: false, lang: "en-GB", localService: true, name: "Microsoft Hazel - English (Great Britain)", voiceURI: "Microsoft Hazel - English (Great Britain)" },
+        ];
+      }
+      return voices;
+    };
+  }
+
+  // 17. Performance timing noise
+  var origNow = performance.now;
+  performance.now = function() { return origNow.call(this) + (Math.random() * 0.1); };
+
+  // 18. document.hasFocus
+  document.hasFocus = function() { return true; };
+
+  // 19. Font enumeration defense
+  if (document.fonts && typeof document.fonts.check === "function") {
+    var origFontCheck = document.fonts.check.bind(document.fonts);
+    var allowedFonts = {};
+    for (var fi = 0; fi < opts.fonts.length; fi++) allowedFonts[opts.fonts[fi].toLowerCase()] = true;
+    document.fonts.check = function(font, text) {
+      var familyMatch = font.match(/(?:\\d+(?:px|pt|em|rem)\\s+)?["']?([^"',]+)/);
+      var family = familyMatch && familyMatch[1] ? familyMatch[1].trim().toLowerCase() : "";
+      if (family && !allowedFonts[family]) return false;
+      return origFontCheck(font, text);
+    };
+  }
+
+  // 20. Object.getOwnPropertyDescriptor protection
+  var origGOPD = Object.getOwnPropertyDescriptor;
+  var patchedNavProps = { webdriver:1, hardwareConcurrency:1, platform:1, languages:1, plugins:1, mimeTypes:1, deviceMemory:1, maxTouchPoints:1, connection:1 };
+  Object.getOwnPropertyDescriptor = function(obj, prop) {
+    if (obj === navigator && typeof prop === "string" && patchedNavProps[prop]) {
+      return { get: function() { return navigator[prop]; }, set: undefined, enumerable: true, configurable: true };
+    }
+    if (obj === window && prop === "chrome") {
+      return { value: window.chrome, writable: true, enumerable: true, configurable: true };
+    }
+    return origGOPD(obj, prop);
+  };
+
+})();`;
+
+  await page.addInitScript({ content: script });
 }
