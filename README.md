@@ -4,8 +4,7 @@
 
   <h1>Kryfto</h1>
   <p><strong>The Production-Grade Browser Data Collection Runtime</strong></p>
-
-  [![CI](https://github.com/kryfto/kryfto/actions/workflows/ci.yml/badge.svg)](https://github.com/kryfto/kryfto/actions/workflows/ci.yml)
+  
   [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
   [![Node.js 20+](https://img.shields.io/badge/node-20%2B-brightgreen.svg)]()
   [![MCP Tools: 42+](https://img.shields.io/badge/MCP_Tools-42%2B-purple.svg)]()
