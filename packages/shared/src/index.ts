@@ -431,3 +431,7 @@ export * from "./recipes.js";
 export * from "./search.js";
 export * from "./ssrf.js";
 export * from "./stealth.js";
+export * from "./fingerprint.js";
+export * from "./browser-stealth.js";
+export * from "./humanize.js";
+export * from "./recaptcha-vision.js";

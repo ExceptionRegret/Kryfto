@@ -1,3 +1,19 @@
+import { config as loadDotenv } from "dotenv";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+
+// Load .env from repo root (walks up from this file's directory)
+const _mcpDir = dirname(fileURLToPath(import.meta.url));
+for (let dir = _mcpDir; ; dir = dirname(dir)) {
+    const candidate = resolve(dir, ".env");
+    if (existsSync(candidate)) {
+        loadDotenv({ path: candidate });
+        break;
+    }
+    if (dir === dirname(dir)) break; // reached filesystem root
+}
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";

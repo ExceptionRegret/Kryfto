@@ -31,6 +31,9 @@ COPY packages/shared/package.json packages/shared/package.json
 
 RUN pnpm install --filter @kryfto/api... --filter @kryfto/shared... --prod --frozen-lockfile
 
+# Install Playwright Chromium and its OS dependencies (needed for Google search)
+RUN npx playwright install --with-deps chromium
+
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/apps/api/migrations ./apps/api/migrations
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist

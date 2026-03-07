@@ -52,6 +52,7 @@ import {
   engineDelay,
   SimpleCookieJar,
 } from "@kryfto/shared";
+import { browserSearchGoogle, closeGoogleBrowser } from "./google-browser.js";
 import { parseBearerToken, requireRole } from "./auth-rbac.js";
 import {
   db,
@@ -1161,20 +1162,41 @@ app.post("/v1/search", async (req, reply) => {
           } catch (error) {
             req.log.warn(
               { err: String(error), engine: "google", requestId: req.id },
-              "google api failed; using html fallback"
+              "google api failed; using browser fallback"
             );
           }
         }
 
-        const searchUrl = buildGoogleHtmlSearchUrl({
-          query: parsed.data.query,
-          safeSearch: parsed.data.safeSearch,
-          locale: parsed.data.locale,
-        });
-        results = parseGoogleHtmlSearchResults(
-          await fetchHtml(searchUrl, "google"),
-          parsed.data.limit
-        );
+        // Google requires JS rendering — use Playwright browser
+        try {
+          results = await browserSearchGoogle(
+            parsed.data.query,
+            parsed.data.limit,
+            parsed.data.safeSearch,
+            parsed.data.locale,
+          );
+        } catch (browserErr) {
+          req.log.warn(
+            { err: String(browserErr), engine: "google", requestId: req.id },
+            "google browser search failed"
+          );
+          // Try plain HTML as last resort (may return 0 results but won't throw)
+          try {
+            const searchUrl = buildGoogleHtmlSearchUrl({
+              query: parsed.data.query,
+              safeSearch: parsed.data.safeSearch,
+              locale: parsed.data.locale,
+            });
+            results = parseGoogleHtmlSearchResults(
+              await fetchHtml(searchUrl, "google"),
+              parsed.data.limit
+            );
+          } catch (htmlErr) {
+            throw new Error(
+              `Google search unavailable: browser=${String(browserErr)}, html=${String(htmlErr)}`
+            );
+          }
+        }
         break;
       }
       case "brave": {
@@ -1457,3 +1479,12 @@ app.post("/v1/recipes", async (req, reply) => {
 });
 
 app.listen({ port: PORT, host: "0.0.0.0" });
+
+// Graceful shutdown: close the shared Google Playwright browser
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, async () => {
+    await closeGoogleBrowser();
+    await app.close();
+    process.exit(0);
+  });
+}

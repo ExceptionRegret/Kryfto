@@ -142,6 +142,7 @@ export async function withRetry<T>(
             last = err;
             const c = classifyError(err);
             if (c.error === "not_found") throw err;
+            if (c.error === "network_error") throw err; // ECONNREFUSED etc — no point retrying
             if (c.error === "blocked" && i >= retries - 1) throw err;
             if (i < retries - 1) {
                 let baseMs = RETRY_BASE_MS;

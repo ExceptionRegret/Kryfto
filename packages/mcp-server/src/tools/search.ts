@@ -17,7 +17,7 @@ import {
     getGoogleConsentCookieHeader,
 } from "@kryfto/shared";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { solveGoogleSorryPage } from "./recaptcha-vision.js";
+import { solveGoogleSorryPage } from "@kryfto/shared";
 import type {
     SearchEngine,
     DirectSearchResult,
@@ -68,12 +68,52 @@ import { RERANKER_VERSION, TRUST_RULES_VERSION, SERVER_VERSION } from "../versio
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:8080";
 const API_TOKEN = process.env.API_TOKEN ?? process.env.KRYFTO_API_TOKEN;
 const searchToken = process.env.KRYFTO_SEARCH_TOKEN;
+/** Skip the API entirely and always use direct HTTP search. */
+const SEARCH_MODE = process.env.KRYFTO_SEARCH_MODE ?? "auto"; // "auto" | "api" | "direct"
 
 function getSearchClient(): CollectorClient {
     return new CollectorClient({
         baseUrl: API_BASE_URL,
         token: searchToken ?? API_TOKEN,
     });
+}
+
+// ── API availability tracking ───────────────────────────────────────
+// Avoids wasting ~35s retrying all engines against a dead API server.
+let _apiAvailable: boolean | null = null; // null = unknown
+let _apiCheckedAt = 0;
+const API_RECHECK_INTERVAL_MS = 60_000; // re-probe every 60s
+
+function isApiConnectionError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return /ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed/i.test(msg);
+}
+
+async function isApiAvailable(): Promise<boolean> {
+    if (SEARCH_MODE === "direct") return false;
+    if (SEARCH_MODE === "api") return true;
+    // "auto" mode: probe and cache
+    if (_apiAvailable !== null && Date.now() - _apiCheckedAt < API_RECHECK_INTERVAL_MS) {
+        return _apiAvailable;
+    }
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(`${API_BASE_URL}/v1/healthz`, {
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        _apiAvailable = res.ok;
+    } catch {
+        _apiAvailable = false;
+    }
+    _apiCheckedAt = Date.now();
+    return _apiAvailable;
+}
+
+function markApiDown(): void {
+    _apiAvailable = false;
+    _apiCheckedAt = Date.now();
 }
 
 const DOMAIN_BLOCKLIST = new Set(
@@ -493,7 +533,29 @@ export async function federatedSearch(
     const trace = opts.debug ? createTrace("federatedSearch") : undefined;
     const client = getSearchClient();
 
+    // Fast-path: skip API calls entirely when the API is known to be down
+    const apiUp = await isApiAvailable();
+    if (!apiUp) {
+        if (opts.debug)
+            debugSteps.push({
+                engine: "api_probe",
+                action: "api_unavailable",
+                durationMs: 0,
+                resultCount: 0,
+            });
+        console.error("[MCP] API server unavailable, skipping to direct HTTP search...");
+    }
+
     for (const engine of engineList) {
+        // Skip API-based search when the API is down
+        if (!apiUp) {
+            enginesFailed.push({
+                engine,
+                error: "network_error" as ErrorCategory,
+                message: `API server unavailable at ${API_BASE_URL}, skipped`,
+            });
+            continue;
+        }
         if (shouldSkipEngine(engine)) {
             enginesFailed.push({
                 engine,
@@ -694,6 +756,13 @@ export async function federatedSearch(
                     resultCount: 0,
                 });
             logEngineError(engine, err);
+
+            // If the API itself is unreachable, skip remaining engines immediately
+            if (isApiConnectionError(err)) {
+                markApiDown();
+                console.error(`[MCP] API connection error on engine '${engine}', skipping remaining API engines`);
+                break;
+            }
         }
     }
 

@@ -4,7 +4,28 @@ All notable changes to Kryfto are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [3.6.0] — CLIP Vision CAPTCHA Solving & Release Infrastructure (Latest)
+## [3.7.0] — Resilient Search & Shared Antibot (Latest)
+
+_Dotenv auto-loading · API availability fast-path · Google browser search in API · Antibot modules in shared · CAPTCHA solver for API · Docker Playwright support_
+
+### Added
+- **Dotenv Auto-Loading** (`mcp-server`): Automatically walks up directories from `import.meta.url` to find `.env` at repo root. No more empty tokens when running from package subdirectories.
+- **API Availability Probing** (`mcp-server/search.ts`): Cached health check (60s TTL, 2s timeout) with `KRYFTO_SEARCH_MODE` env var (`auto`/`api`/`direct`). On ECONNREFUSED, immediately skips remaining engines and falls back to direct HTTP search.
+- **Browser-Based Google Search in API** (`apps/api/src/google-browser.ts`): Full 20-point antibot system for Google search — stealth browser launch, fingerprint generation, humanized typing/clicking, consent cookie, and CAPTCHA solver. Used by n8n and other API consumers.
+- **Google CAPTCHA Solver in API**: `solveGoogleSorryPage()` wired into API server's Google search route. 3-layer solver (checkbox → audio/Whisper → CLIP vision) handles Docker IP rate-limits.
+- **Antibot Modules in Shared Package**: `browser-stealth.ts`, `fingerprint.ts`, `humanize.ts`, and `recaptcha-vision.ts` moved from worker/mcp-server to `@kryfto/shared` for reuse across all packages.
+- **Docker Playwright Support**: `api.Dockerfile` now installs Playwright Chromium with `npx playwright install --with-deps chromium`.
+
+### Changed
+- **MCP Search Network Error Handling**: `helpers.ts` skips retries on `ECONNREFUSED`/`ECONNRESET`/`ENOTFOUND` — no point retrying when the API server is down.
+- **API Google Search Fallback Chain**: Google CSE API → Playwright browser (full antibot + CAPTCHA) → plain HTML parser. Graceful shutdown closes browser on SIGINT/SIGTERM.
+- **Shared Package**: Added `playwright` as optional peer dependency and `@xenova/transformers` as dependency for CAPTCHA solving modules.
+
+### Fixed
+- **MCP Server Auth Failure**: `.env` file at repo root was not being loaded when MCP server ran from `packages/mcp-server/` — all API-based engines returned 401 AUTH_UNAUTHORIZED.
+- **`window` Reference in Shared**: `humanize.ts` `scrollSmoothly()` used `window.scrollBy` which doesn't exist in Node — replaced with `globalThis` cast for DOM compatibility inside `page.evaluate()`.
+
+## [3.6.0] — CLIP Vision CAPTCHA Solving & Release Infrastructure
 
 _CLIP-large image classification · hCaptcha game detection · Coverage reporting · GitHub releases · NPM publish pipeline · README audit_
 

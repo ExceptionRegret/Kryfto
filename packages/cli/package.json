@@ -1,6 +1,6 @@
 {
   "name": "@kryfto/cli",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "private": true,
   "type": "module",
   "bin": {
