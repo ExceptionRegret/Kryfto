@@ -8,15 +8,99 @@ The Kryfto REST API (v3.7.0) provides programmable access to the headless browse
 http://localhost:8080/v1
 ```
 
-## Authentication
+## Authentication & RBAC
 
-All endpoints (except health checks and metrics) require a Bearer token in the `Authorization` header:
+All endpoints (except health checks, metrics, and `/docs`) require a Bearer token in the `Authorization` header:
 
 ```http
 Authorization: Bearer <your_api_token>
 ```
 
-Tokens are scoped to one of three roles: `admin`, `developer`, or `readonly`. Each endpoint lists the minimum required role.
+### How It Works
+
+Authentication is enforced via a Fastify `preHandler` hook that runs before every request:
+
+1. **Public bypass** — Requests to `/v1/healthz`, `/v1/readyz`, `/v1/metrics`, `/docs`, and `/docs/openapi.yaml` skip auth entirely.
+2. **Token resolution** — The `Authorization: Bearer <token>` header is parsed. The raw token is SHA-256 hashed and looked up in the `api_tokens` Postgres table. Only non-revoked tokens (`revoked_at IS NULL`) are accepted.
+3. **Auth context** — A matched token yields an `AuthContext` containing `tokenId`, `projectId`, `role`, and `tokenHash`. This is attached to `request.auth` for downstream route handlers.
+4. **Artifact download fallback** — Requests to `/v1/artifacts/:id` with a valid `downloadToken` query param are allowed through without a Bearer token (for embedding in `<img>` tags, etc.).
+5. **Unauthorized** — If none of the above match, the request gets a `401 AUTH_UNAUTHORIZED` response.
+
+### Roles
+
+Tokens are scoped to one of three roles. Each route calls `requireRole(req.auth, [...allowedRoles])` which returns the auth context or throws `AUTH_FORBIDDEN`:
+
+| Role         | Description |
+| ------------ | ----------- |
+| `admin`      | Full access. Can create tokens, manage recipes, and perform all operations. |
+| `developer`  | Can create/cancel jobs, run searches, start crawls, extract data, and validate recipes. Cannot create tokens or upload recipes. |
+| `readonly`   | Can read job status, stream logs, list artifacts, download artifacts, run searches, list recipes, and view crawl status. Cannot create or mutate resources. |
+
+### Role Permissions Matrix
+
+| Endpoint                       | admin | developer | readonly |
+| ------------------------------ | :---: | :-------: | :------: |
+| `POST /v1/admin/tokens`        |   x   |           |          |
+| `POST /v1/jobs`                |   x   |     x     |          |
+| `GET /v1/jobs/:id`             |   x   |     x     |    x     |
+| `POST /v1/jobs/:id/cancel`     |   x   |     x     |          |
+| `GET /v1/jobs/:id/logs`        |   x   |     x     |    x     |
+| `GET /v1/jobs/:id/artifacts`   |   x   |     x     |    x     |
+| `GET /v1/artifacts/:id`        |   x   |     x     |    x     |
+| `POST /v1/extract`             |   x   |     x     |          |
+| `POST /v1/search`              |   x   |     x     |    x     |
+| `POST /v1/crawl`               |   x   |     x     |          |
+| `GET /v1/crawl/:id`            |   x   |     x     |    x     |
+| `GET /v1/recipes`              |   x   |     x     |    x     |
+| `POST /v1/recipes`             |   x   |           |          |
+| `POST /v1/recipes/validate`    |   x   |     x     |          |
+
+### Project Scoping
+
+Every token belongs to a **project** (via `projectId`). Jobs, crawls, artifacts, and recipes are project-scoped — a token can only access resources within its own project. Cross-project access is rejected with `403 AUTH_FORBIDDEN`.
+
+### Token Storage
+
+- Tokens are generated as 24 random bytes encoded as hex (48 chars).
+- Only the **SHA-256 hash** is stored in the database — the raw token is returned once at creation and never stored or logged.
+- Log output redacts `req.headers.authorization`, `*.token`, `*.secret`, `*.password`, and `*.apiKey` fields.
+- Revoked tokens (`revoked_at IS NOT NULL`) are excluded from lookups.
+
+### Bootstrap Token
+
+On startup, the API inserts a bootstrap admin token for the default project if one doesn't already exist. Set via:
+
+```env
+KRYFTO_BOOTSTRAP_ADMIN_TOKEN=<your-initial-token>
+# or
+KRYFTO_API_TOKEN=<your-initial-token>
+```
+
+This bootstrap token gets `admin` role on the `default` project and is idempotent — re-running the API won't duplicate it.
+
+### Rate Limiting
+
+Requests are rate-limited per `token_hash:ip` pair. Configurable via:
+
+```env
+KRYFTO_RATE_LIMIT_RPM=120   # requests per minute (default: 120)
+```
+
+### Audit Logging
+
+All mutating operations are recorded in the `audit_logs` table with:
+
+| Field          | Description |
+| -------------- | ----------- |
+| `project_id`   | Scoped project |
+| `token_id`     | Token that performed the action |
+| `actor_role`   | Role at time of action |
+| `action`       | e.g., `job.create`, `admin.token.create`, `artifact.download` |
+| `resource_type`| e.g., `job`, `token`, `artifact`, `recipe`, `crawl` |
+| `resource_id`  | UUID of affected resource |
+| `request_id`   | Correlation ID from `x-request-id` header |
+| `ip_address`   | Client IP |
+| `details`      | JSON object with action-specific metadata |
 
 ## Error Responses
 
