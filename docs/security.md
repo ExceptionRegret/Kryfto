@@ -7,10 +7,18 @@
 - Tokens are hashed (`sha256`) at rest.
 - Tokens are project-scoped; job/crawl/artifact access is project-scoped.
 
+## Token Expiration
+
+- Tokens can have an optional `expiresAt` timestamp.
+- Expired tokens are rejected during `resolveAuth()` before any route handler executes.
+- Token expiration can be set at creation or updated via `PATCH /v1/admin/tokens/:tokenId`.
+
 ## Rate Limiting
 
 - Fastify rate limit per token+IP key.
-- Configurable via `KRYFTO_RATE_LIMIT_RPM`.
+- **Per-role defaults**: admin (500 RPM), developer (120 RPM), readonly (60 RPM).
+- Per-role limits stored in `rate_limit_config` database table, manageable via `GET/PUT /v1/admin/rate-limits`.
+- Global fallback configurable via `KRYFTO_RATE_LIMIT_RPM`.
 
 ## SSRF Protection
 

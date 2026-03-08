@@ -25,6 +25,7 @@ Kryfto is a comprehensive framework for automated data extraction, web crawling,
 - **🕵️‍♂️ Advanced Stealth & Anti-Bot Engine**: Unified anti-bot layer with **12 rotated modern User-Agents** (Chrome 130–133, Edge 131/133), per-browser `Sec-Ch-Ua` client hints, `Sec-Fetch-*` headers, Chromium-only `Accept` strings, engine-appropriate `Referer` headers, per-engine request spacing delays, canvas fingerprint randomization, WebGL vendor/renderer spoofing, `navigator.platform` matching, `hardwareConcurrency` randomization, WebRTC IP leak prevention, and an RFC 6265-compliant in-memory cookie jar with 30min TTL. **New in v3.5.1:** Consistent cross-signal fingerprints (UA matched to platform, screen, WebGL, fonts, and audio), 20-point browser evasion suite, humanized browser interactions (Bezier curve mouse movements with micro-overshoots, realistic typing with typos, smooth scrolling), per-domain browser session pool with 30min TTL, and browser-based CAPTCHA solving for Cloudflare Turnstile, reCAPTCHA v2, hCaptcha, and Datadome — all without external paid APIs. reCAPTCHA image grids are classified locally via CLIP vision (`clip-vit-large-patch14`), and audio challenges are transcribed locally via Whisper, both using `@xenova/transformers`.
 - **🛡️ Zero Trace Privacy**: Execute purely in-memory HTTP extractions wrapping our bot-evasion without persisting any telemetry or artifacts to the Postgres database.
 - **⚙️ Workflow Engine Native**: Fully documented OpenAPI spec makes it trivial to drop into `n8n`, Zapier, Make, or custom Python/TypeScript pipelines.
+- **🖥️ Admin Dashboard**: Built-in React admin UI (port 3001) for managing tokens, projects, jobs, crawls, audit logs, and per-role rate limits. Includes an interactive **API Playground** for testing any endpoint live and an **Examples** page with ready-to-use cURL commands. Dark-themed SPA served as a separate nginx container.
 - **☁️ Enterprise Infrastructure**: Backed by **Postgres** for persistence, **Redis + BullMQ** for reliable concurrent job queuing, and **MinIO/S3** for long-term artifact storage.
 - **📊 SLO Dashboard & Eval Suite**: Built-in reliability monitoring with per-tool success rates, latency percentiles (p50/p95/p99), deterministic request replay, and a 10-query benchmark suite for nightly regression testing.
 - **🔄 Continuous Research Agent**: Deploy autonomous background research loops that search, monitor, diff pages, and fire webhook alerts — all from a single MCP tool call.
@@ -42,12 +43,14 @@ node scripts/generate-env.mjs -o .env
 # Option 2: Or copy the example and fill in values manually
 cp .env.example .env
 
-# Spin up the entire infrastructure (API, Worker, Postgres, Redis, Minio S3)
+# Spin up the entire infrastructure (API, Dashboard, Worker, Postgres, Redis, Minio S3)
 docker compose up -d --build
 
 # Verify health
 curl -H "Authorization: Bearer $KRYFTO_API_TOKEN" http://localhost:8080/v1/healthz
 ```
+
+The **Admin Dashboard** is available at `http://localhost:3001/dashboard/` — log in with your admin API token to manage tokens, projects, jobs, crawls, audit logs, and rate limits.
 
 Once running, you can immediately dispatch extraction jobs to the headless worker fleet:
 
@@ -93,7 +96,7 @@ We maintain exhaustive documentation for every component of the Kryfto stack.
 | 🚀 [**Deployment Guides**](docs/deploy.md)    | How to deploy to Railway, DigitalOcean, and naked Linux VPS instances securely.                            |
 | 🤖 [**MCP Integration**](docs/mcp.md)         | How to connect Cursor, Claude Code, and Codex to your Kryfto server via HTTPS or SSH tunneling.            |
 | ⚡ [**n8n Workflow Guide**](docs/n8n.md)      | How to automate advanced, stealthy web extractions straight into Google Sheets using n8n.                  |
-| 🔒 [**Security & Roles**](docs/security.md)   | Setting up RBAC, admin tokens, and preventing Server-Side Request Forgery (`SSRF`).                        |
+| 🔒 [**Security & Roles**](docs/security.md)   | Setting up RBAC, admin tokens, token expiration, per-role rate limits, and preventing SSRF.                 |
 | 🏗️ [**Architecture**](docs/architecture.md)   | A deep-dive into the BullMQ, Redis, Node, and MinIO scaling infrastructure map.                            |
 | 🥘 [**Extraction Recipes**](docs/recipes.md)  | Pre-written JSON extraction selectors for popular websites. Auto-imported as dynamic `recipe_*` MCP tools. |
 | 🔌 [**OpenAPI Spec**](docs/openapi.yaml)      | The raw `yaml` schema defining the fully-typed REST API.                                                   |
@@ -396,11 +399,132 @@ KRYFTO_PROXY_URLS=socks5://proxy1:1080,http://user:pass@proxy2:8080
 
 Kryfto is structured as an NPM monorepo using `pnpm` workspaces.
 
-- `apps/api` - Fastify control plane (handles your REST requests)
-- `apps/worker` - BullMQ workers (manages Playwright instances and executes steps)
-- `packages/sdk-ts` - TypeScript core SDK
-- `packages/mcp-server` - Anthropic Model Context Protocol Bridge
-- `packages/cli` - Terminal management interface
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENTS                                            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
+│  │  cURL /  │  │  n8n /   │  │  Claude  │  │  CLI     │  │  Admin           │  │
+│  │  SDK-TS  │  │  Zapier  │  │  Cursor  │  │  Tool    │  │  Dashboard       │  │
+│  │  SDK-PY  │  │  Make    │  │  Codex   │  │          │  │  (React SPA)     │  │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────────┬─────────┘  │
+│       │              │             │              │                 │            │
+│       │         REST API (/v1)     │     MCP (stdio)          REST API          │
+│       │              │             │              │           (/v1/admin)        │
+└───────┼──────────────┼─────────────┼──────────────┼─────────────────┼────────────┘
+        │              │             │              │                 │
+        ▼              ▼             │              │                 ▼
+┌───────────────────────────┐       │              │    ┌─────────────────────────┐
+│      Fastify API          │       │              │    │   nginx (Dashboard)     │
+│      (apps/api)           │       │              │    │   :3001                 │
+│  :8080                    │◄──────┼──────────────┼────│   /dashboard/* → SPA    │
+│                           │       │              │    │   /v1/*  → proxy → API  │
+│  ┌─────────────────────┐  │       │              │    │                         │
+│  │ Auth & RBAC         │  │       │              │    │   9 pages:              │
+│  │ • SHA-256 tokens    │  │       │              │    │   Overview · Tokens     │
+│  │ • 3 roles           │  │       │              │    │   Projects · Jobs       │
+│  │ • Token expiration  │  │       │              │    │   Crawls · Audit Logs   │
+│  │ • Per-role rate lim. │  │       │              │    │   Rate Limits           │
+│  └─────────────────────┘  │       │              │    │   API Playground        │
+│  ┌─────────────────────┐  │       ▼              │    │   API Examples          │
+│  │ Route Handlers      │  │  ┌────────────────┐  │    └─────────────────────────┘
+│  │ • Jobs CRUD         │  │  │ MCP Server     │  │
+│  │ • Search (5 engines)│  │  │ (packages/     │  │
+│  │ • Crawl             │  │  │  mcp-server)   │  │
+│  │ • Extract           │  │  │ 42+ tools      │  │
+│  │ • Recipes           │  │  │ • search       │──┘
+│  │ • Admin endpoints   │  │  │ • browse       │
+│  └─────────────────────┘  │  │ • research     │
+│  ┌─────────────────────┐  │  │ • extract      │
+│  │ Audit Logging       │  │  │ • watch        │
+│  │ SSRF Protection     │  │  │ • eval suite   │
+│  │ Idempotency Keys    │  │  │ • CAPTCHA solve│
+│  │ OpenTelemetry       │  │  └────────────────┘
+│  └─────────────────────┘  │
+└────────────┬──────────────┘
+             │
+             │ Enqueue (BullMQ)
+             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                         Redis :6379                                │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐    │
+│  │  Job Queues  │  │  Concurrency │  │  Pub/Sub (SSE logs)   │    │
+│  │  (BullMQ)   │  │  Semaphores  │  │                       │    │
+│  └──────────────┘  └──────────────┘  └───────────────────────┘    │
+└────────────────────────────┬───────────────────────────────────────┘
+                             │
+                             │ Consume
+                             ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                  Worker (apps/worker)                                 │
+│                                                                      │
+│  ┌────────────────────────┐    ┌─────────────────────────────────┐   │
+│  │  Fetch Path            │    │  Browser Path (Playwright)      │   │
+│  │  • HTTP GET/POST       │    │  • Chromium / Firefox / WebKit  │   │
+│  │  • Stealth headers     │    │  • 20-point stealth evasion     │   │
+│  │  • Cookie jar          │    │  • Fingerprint consistency      │   │
+│  └────────────────────────┘    │  • Humanized mouse/keyboard     │   │
+│                                │  • Browser session pool          │   │
+│  ┌────────────────────────┐    │  • CAPTCHA solving (CLIP/Whisper)│   │
+│  │  Extraction Engine     │    └─────────────────────────────────┘   │
+│  │  • CSS selectors       │                                          │
+│  │  • JSON Schema         │    ┌─────────────────────────────────┐   │
+│  │  • Plugin modules      │    │  Crawl Orchestrator             │   │
+│  │  • HTML → Markdown     │    │  • BFS link-follow              │   │
+│  └────────────────────────┘    │  • Depth/page caps              │   │
+│                                │  • robots.txt respect           │   │
+│                                │  • Politeness delays            │   │
+│                                └─────────────────────────────────┘   │
+└────────────────────────────┬─────────────────────────────────────────┘
+                             │
+                             │ Persist
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                    Persistence Layer                                │
+│                                                                    │
+│  ┌──────────────────────────┐    ┌─────────────────────────────┐  │
+│  │  PostgreSQL :5432        │    │  MinIO / S3 :9000           │  │
+│  │                          │    │                             │  │
+│  │  • projects              │    │  • Screenshots (PNG)        │  │
+│  │  • api_tokens            │    │  • HTML snapshots           │  │
+│  │  • rate_limit_config     │    │  • HAR archives             │  │
+│  │  • jobs + job_logs       │    │  • Extracted data (JSON)    │  │
+│  │  • artifacts (metadata)  │    │  • Cookies exports          │  │
+│  │  • crawl_runs + nodes    │    │                             │  │
+│  │  • recipes               │    │  Deduplicated by SHA-256    │  │
+│  │  • audit_logs            │    │                             │  │
+│  │  • idempotency_keys      │    └─────────────────────────────┘  │
+│  │  • browser_profiles      │                                     │
+│  └──────────────────────────┘                                     │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│                    Shared Packages                                  │
+│                                                                    │
+│  ┌──────────────────────┐  ┌────────────┐  ┌──────────────────┐   │
+│  │  @kryfto/shared      │  │  @kryfto/  │  │  @kryfto/cli     │   │
+│  │  • Zod schemas       │  │  sdk-ts    │  │  • Commander CLI │   │
+│  │  • Stealth layer     │  │  • Typed   │  │  • YAML recipes  │   │
+│  │  • Search parsers    │  │    client  │  │                  │   │
+│  │  • Fingerprint gen   │  │  • Promise │  └──────────────────┘   │
+│  │  • Browser stealth   │  │    chains  │                         │
+│  │  • Humanize utils    │  └────────────┘                         │
+│  │  • CAPTCHA vision    │                                         │
+│  └──────────────────────┘                                         │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Monorepo Layout
+
+| Path | Description |
+|---|---|
+| `apps/api` | Fastify control plane — REST API, auth/RBAC, per-role rate limiting, token expiration, admin endpoints |
+| `apps/dashboard` | React admin dashboard — token/project/job management, audit logs, rate limit config, API playground, examples |
+| `apps/worker` | BullMQ workers — Playwright browser execution, stealth, CAPTCHA solving, crawl orchestration |
+| `packages/mcp-server` | MCP bridge — 42+ tools for Claude, Cursor, Codex (search, browse, research, eval) |
+| `packages/shared` | Shared library — Zod schemas, stealth layer, search parsers, fingerprint, humanize, CAPTCHA vision |
+| `packages/sdk-ts` | TypeScript SDK — typed API client with promise chains |
+| `packages/sdk-py` | Python SDK |
+| `packages/cli` | CLI tool — Commander-based terminal interface with YAML recipe support |
 
 ### Development Commands
 

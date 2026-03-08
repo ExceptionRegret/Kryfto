@@ -4,7 +4,32 @@ All notable changes to Kryfto are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [3.7.0] — Resilient Search & Shared Antibot (Latest)
+## [3.8.0] — Admin Dashboard & Per-Role Rate Limits (Latest)
+
+_Admin dashboard · Token management UI · Per-role rate limiting · Token expiration · Project management · Audit log viewer_
+
+### Added
+- **Admin Dashboard** (`apps/dashboard`): Full React + Vite + Tailwind SPA for managing the Kryfto runtime. Dark-themed UI with sidebar navigation served as a separate nginx container on port 3001.
+  - **Overview** page with aggregate stats (jobs, tokens, artifacts, crawls)
+  - **Token Management**: Create, revoke, rotate tokens with role assignment and expiration dates. Copy-to-clipboard for new tokens.
+  - **Project Management**: List and create projects
+  - **Jobs Browser**: Paginated job list with state filtering and cancel actions
+  - **Crawls Browser**: Paginated crawl list with progress statistics
+  - **Audit Logs**: Paginated, filterable audit log viewer
+  - **Rate Limits**: Per-role RPM editor with save functionality
+  - **API Playground**: Interactive API testing console with method selector, JSON body editor, 18 presets covering all endpoints, response viewer with status/timing, copy-as-cURL, and request history with replay
+  - **API Examples**: 6 detailed expandable examples (Search, Jobs, Crawl, Extract, Tokens, Rate Limits) with request/response samples, cURL commands, and contextual notes
+- **Per-Role Rate Limiting**: Rate limits are now differentiated by role — admin (500 RPM), developer (120 RPM), readonly (60 RPM). Stored in `rate_limit_config` database table, configurable via API.
+- **Token Expiration**: Tokens can now have an `expiresAt` timestamp. Expired tokens are rejected at authentication time.
+- **New Admin API Endpoints**: `GET/DELETE/PATCH /v1/admin/tokens/:tokenId`, `POST /v1/admin/tokens/:tokenId/rotate`, `GET/POST /v1/admin/projects`, `GET /v1/admin/audit-logs`, `GET/PUT /v1/admin/rate-limits`, `GET /v1/admin/stats`, `GET /v1/admin/jobs`, `GET /v1/admin/crawls`.
+- **Database Migration** (`0002_token_expiry_and_rate_limits.sql`): Adds `expires_at` column to `api_tokens` and creates `rate_limit_config` table.
+- **Dashboard Docker Container** (`docker/dashboard.Dockerfile`): Separate nginx container serving the dashboard SPA with API reverse proxy.
+
+### Changed
+- **Dashboard separated from API**: Dashboard runs as its own container (nginx on port 3001) instead of being embedded in the API server, avoiding route conflicts.
+- **Docker Compose**: Added `dashboard` service on port 3001 (configurable via `KRYFTO_DASHBOARD_PORT`).
+
+## [3.7.0] — Resilient Search & Shared Antibot
 
 _Dotenv auto-loading · API availability fast-path · Google browser search in API · Antibot modules in shared · CAPTCHA solver for API · Docker Playwright support_
 

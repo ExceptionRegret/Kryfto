@@ -1,6 +1,6 @@
 # Kryfto API Reference
 
-The Kryfto REST API (v3.7.0) provides programmable access to the headless browser fleet, extraction engine, federated search, domain crawling, and recipe management.
+The Kryfto REST API (v3.8.0) provides programmable access to the headless browser fleet, extraction engine, federated search, domain crawling, recipe management, and admin dashboard.
 
 ## Base URL
 
@@ -38,9 +38,22 @@ Tokens are scoped to one of three roles. Each route calls `requireRole(req.auth,
 
 ### Role Permissions Matrix
 
-| Endpoint                       | admin | developer | readonly |
-| ------------------------------ | :---: | :-------: | :------: |
-| `POST /v1/admin/tokens`        |   x   |           |          |
+| Endpoint                              | admin | developer | readonly |
+| ------------------------------------- | :---: | :-------: | :------: |
+| `POST /v1/admin/tokens`               |   x   |           |          |
+| `GET /v1/admin/tokens`                |   x   |           |          |
+| `GET /v1/admin/tokens/:tokenId`       |   x   |           |          |
+| `DELETE /v1/admin/tokens/:tokenId`    |   x   |           |          |
+| `PATCH /v1/admin/tokens/:tokenId`     |   x   |           |          |
+| `POST /v1/admin/tokens/:tokenId/rotate` |   x   |         |          |
+| `GET /v1/admin/projects`              |   x   |           |          |
+| `POST /v1/admin/projects`             |   x   |           |          |
+| `GET /v1/admin/stats`                 |   x   |           |          |
+| `GET /v1/admin/jobs`                  |   x   |           |          |
+| `GET /v1/admin/crawls`               |   x   |           |          |
+| `GET /v1/admin/audit-logs`           |   x   |           |          |
+| `GET /v1/admin/rate-limits`          |   x   |           |          |
+| `PUT /v1/admin/rate-limits`          |   x   |           |          |
 | `POST /v1/jobs`                |   x   |     x     |          |
 | `GET /v1/jobs/:id`             |   x   |     x     |    x     |
 | `POST /v1/jobs/:id/cancel`     |   x   |     x     |          |
@@ -78,12 +91,24 @@ KRYFTO_API_TOKEN=<your-initial-token>
 
 This bootstrap token gets `admin` role on the `default` project and is idempotent — re-running the API won't duplicate it.
 
+### Token Expiration
+
+Tokens can have an optional `expiresAt` timestamp. Expired tokens are rejected during authentication — the `resolveAuth()` function checks `expiresAt` against the current time before granting access.
+
 ### Rate Limiting
 
-Requests are rate-limited per `token_hash:ip` pair. Configurable via:
+Requests are rate-limited per `token_hash:ip` pair with **per-role defaults**:
+
+| Role        | Default RPM |
+| ----------- | ----------- |
+| `admin`     | 500         |
+| `developer` | 120         |
+| `readonly`  | 60          |
+
+Per-role limits are stored in the `rate_limit_config` database table and can be updated via the Admin Rate Limits API. The global fallback is also configurable via:
 
 ```env
-KRYFTO_RATE_LIMIT_RPM=120   # requests per minute (default: 120)
+KRYFTO_RATE_LIMIT_RPM=120   # fallback requests per minute (default: 120)
 ```
 
 ### Audit Logging
@@ -200,6 +225,166 @@ POST /v1/admin/tokens
 ```
 
 > Store the `token` value immediately — it is not retrievable after creation.
+
+### List Tokens
+
+```
+GET /v1/admin/tokens
+```
+
+Returns all tokens (without raw values) for the authenticated project.
+
+### Get Token
+
+```
+GET /v1/admin/tokens/:tokenId
+```
+
+Returns token metadata (name, role, project, creation date, expiration, revocation status).
+
+### Revoke Token
+
+```
+DELETE /v1/admin/tokens/:tokenId
+```
+
+Sets `revoked_at` on the token, immediately invalidating it.
+
+### Update Token
+
+```
+PATCH /v1/admin/tokens/:tokenId
+```
+
+**Request Body:**
+
+| Field       | Type   | Required | Description |
+| ----------- | ------ | -------- | ----------- |
+| `name`      | string | No       | New display name |
+| `role`      | string | No       | New role (`admin`, `developer`, `readonly`) |
+| `expiresAt` | string (ISO 8601) | No | Token expiration timestamp |
+
+### Rotate Token
+
+```
+POST /v1/admin/tokens/:tokenId/rotate
+```
+
+Revokes the existing token and generates a new one with the same name, role, and project.
+
+**Response (200):**
+
+```json
+{
+  "token": "kryfto_new_token...",
+  "tokenId": "new-uuid"
+}
+```
+
+---
+
+## 2b. Admin — Projects
+
+> **Required role:** `admin`
+
+### List Projects
+
+```
+GET /v1/admin/projects
+```
+
+### Create Project
+
+```
+POST /v1/admin/projects
+```
+
+**Request Body:**
+
+| Field  | Type   | Required | Description |
+| ------ | ------ | -------- | ----------- |
+| `name` | string | Yes      | Project name |
+
+---
+
+## 2c. Admin — Monitoring & Configuration
+
+> **Required role:** `admin`
+
+### Dashboard Stats
+
+```
+GET /v1/admin/stats
+```
+
+Returns aggregate counts for jobs, tokens, artifacts, and crawls.
+
+### List All Jobs (Admin)
+
+```
+GET /v1/admin/jobs
+```
+
+**Query Parameters:**
+
+| Param    | Type    | Default | Description |
+| -------- | ------- | ------- | ----------- |
+| `page`   | integer | `1`     | Page number |
+| `limit`  | integer | `20`    | Results per page |
+| `state`  | string  | —       | Filter by job state |
+
+### List All Crawls (Admin)
+
+```
+GET /v1/admin/crawls
+```
+
+**Query Parameters:**
+
+| Param    | Type    | Default | Description |
+| -------- | ------- | ------- | ----------- |
+| `page`   | integer | `1`     | Page number |
+| `limit`  | integer | `20`    | Results per page |
+
+### Audit Logs
+
+```
+GET /v1/admin/audit-logs
+```
+
+**Query Parameters:**
+
+| Param    | Type    | Default | Description |
+| -------- | ------- | ------- | ----------- |
+| `page`   | integer | `1`     | Page number |
+| `limit`  | integer | `50`    | Results per page |
+| `action` | string  | —       | Filter by action type |
+
+### Get Rate Limits
+
+```
+GET /v1/admin/rate-limits
+```
+
+Returns the per-role RPM configuration.
+
+### Update Rate Limits
+
+```
+PUT /v1/admin/rate-limits
+```
+
+**Request Body:**
+
+```json
+{
+  "limits": [
+    { "role": "admin", "rpm": 500 },
+    { "role": "developer", "rpm": 120 },
+    { "role": "readonly", "rpm": 60 }
+  ]
+}
+```
 
 ---
 
@@ -808,6 +993,19 @@ Only `name` and `value` are required; all other fields are optional.
 | GET    | `/v1/metrics`               | Public                 | Prometheus metrics |
 | GET    | `/docs/openapi.yaml`        | Public                 | OpenAPI spec |
 | POST   | `/v1/admin/tokens`          | admin                  | Create API token |
+| GET    | `/v1/admin/tokens`          | admin                  | List all tokens |
+| GET    | `/v1/admin/tokens/:tokenId` | admin                  | Get token details |
+| DELETE | `/v1/admin/tokens/:tokenId` | admin                  | Revoke token |
+| PATCH  | `/v1/admin/tokens/:tokenId` | admin                  | Update token |
+| POST   | `/v1/admin/tokens/:tokenId/rotate` | admin            | Rotate token |
+| GET    | `/v1/admin/projects`        | admin                  | List projects |
+| POST   | `/v1/admin/projects`        | admin                  | Create project |
+| GET    | `/v1/admin/stats`           | admin                  | Dashboard stats |
+| GET    | `/v1/admin/jobs`            | admin                  | List all jobs (paginated) |
+| GET    | `/v1/admin/crawls`          | admin                  | List all crawls (paginated) |
+| GET    | `/v1/admin/audit-logs`      | admin                  | Query audit logs |
+| GET    | `/v1/admin/rate-limits`     | admin                  | Get rate limit config |
+| PUT    | `/v1/admin/rate-limits`     | admin                  | Update rate limits |
 | POST   | `/v1/jobs`                  | admin, developer       | Create job |
 | GET    | `/v1/jobs/:jobId`           | admin, developer, readonly | Get job status |
 | POST   | `/v1/jobs/:jobId/cancel`    | admin, developer       | Cancel job |

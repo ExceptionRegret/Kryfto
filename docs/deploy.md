@@ -27,6 +27,8 @@ curl http://localhost:8080/v1/healthz
 curl http://localhost:8080/v1/readyz
 ```
 
+The **Admin Dashboard** is available at `http://localhost:3001/dashboard/`. Log in with your admin API token to manage tokens, projects, jobs, crawls, audit logs, and per-role rate limits. The dashboard port is configurable via `KRYFTO_DASHBOARD_PORT` (default: 3001).
+
 ## 3) Auth Header
 
 ```bash
@@ -178,18 +180,19 @@ Check that the containers are healthy:
 sudo docker compose ps
 ```
 
-You should see all containers (API, worker, postgres, redis, minio) with a status of `Up (healthy)`.
+You should see all containers (API, dashboard, worker, postgres, redis, minio) with a status of `Up (healthy)`. The admin dashboard will be accessible at `http://your-vps-ip:3001/dashboard/`.
 
 ### Step 6: Security Recommendations
 
-By default, the Kryfto API exposes port `8080` to the internet.
+By default, the Kryfto API exposes port `8080` and the dashboard exposes port `3001` to the internet.
 
 **For Production Use:**
 
-1. **Firewall:** Restrict access to port `8080` so that only trusted IP addresses (like your home IP or your Vercel/n8n backend IP) can reach it.
+1. **Firewall:** Restrict access to ports `8080` (API) and `3001` (dashboard) so that only trusted IP addresses can reach them.
    ```bash
    sudo ufw allow ssh
    sudo ufw allow from YOUR.IP.ADDRESS.HERE to any port 8080
+   sudo ufw allow from YOUR.IP.ADDRESS.HERE to any port 3001
    sudo ufw enable
    ```
 2. **Reverse Proxy (SSL):** If you intend to hit the API over the public web, it is highly recommended to install [Caddy](https://caddyserver.com/docs/install#debian-ubuntu-raspbian) or NGINX on your VPS to automatically provision a Let's Encrypt HTTPS certificate for your domain.

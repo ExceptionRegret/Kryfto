@@ -73,6 +73,7 @@ import {
   jobLogs,
   jobs,
   projects,
+  rateLimitConfig,
   recipes,
 } from "./db/schema.js";
 
@@ -250,6 +251,7 @@ async function resolveAuth(request: {
       projectId: apiTokens.projectId,
       role: apiTokens.role,
       tokenHash: apiTokens.tokenHash,
+      expiresAt: apiTokens.expiresAt,
     })
     .from(apiTokens)
     .where(and(eq(apiTokens.tokenHash, hashed), isNull(apiTokens.revokedAt)))
@@ -257,6 +259,7 @@ async function resolveAuth(request: {
 
   const row = tokenRows[0];
   if (!row) return null;
+  if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
   return {
     tokenId: row.id,
     projectId: row.projectId,
@@ -290,8 +293,24 @@ const crawlQueue = new Queue("collector-crawls", {
   connection: redisConnection,
 });
 
+// Load per-role rate limits from DB (falls back to env/defaults)
+const roleLimitsRows = await db.select().from(rateLimitConfig);
+const roleLimits: Record<string, number> = {
+  admin: 500,
+  developer: 120,
+  readonly: 60,
+};
+for (const row of roleLimitsRows) {
+  roleLimits[row.role] = row.rpm;
+}
+const defaultRpm = Number(process.env.KRYFTO_RATE_LIMIT_RPM ?? 120);
+
 await app.register(rateLimit, {
-  max: Number(process.env.KRYFTO_RATE_LIMIT_RPM ?? 120),
+  max: (req) => {
+    const role = req.auth?.role;
+    if (role && roleLimits[role] !== undefined) return roleLimits[role]!;
+    return defaultRpm;
+  },
   timeWindow: "1 minute",
   keyGenerator: (req) => {
     const auth = req.headers.authorization ?? "";
@@ -1477,6 +1496,447 @@ app.post("/v1/recipes", async (req, reply) => {
 
   return reply.status(201).send({ id: parsed.data.id });
 });
+
+// ── Admin: List tokens ──────────────────────────────────────────────
+app.get("/v1/admin/tokens", async (req) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const rows = await db
+    .select({
+      id: apiTokens.id,
+      name: apiTokens.name,
+      role: apiTokens.role,
+      projectId: apiTokens.projectId,
+      createdAt: apiTokens.createdAt,
+      expiresAt: apiTokens.expiresAt,
+      revokedAt: apiTokens.revokedAt,
+    })
+    .from(apiTokens)
+    .where(eq(apiTokens.projectId, auth.projectId))
+    .orderBy(desc(apiTokens.createdAt));
+  return { items: rows };
+});
+
+// ── Admin: Get token details ────────────────────────────────────────
+app.get("/v1/admin/tokens/:tokenId", async (req, reply) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const { tokenId } = req.params as { tokenId: string };
+  const rows = await db
+    .select({
+      id: apiTokens.id,
+      name: apiTokens.name,
+      role: apiTokens.role,
+      projectId: apiTokens.projectId,
+      createdAt: apiTokens.createdAt,
+      expiresAt: apiTokens.expiresAt,
+      revokedAt: apiTokens.revokedAt,
+    })
+    .from(apiTokens)
+    .where(
+      and(eq(apiTokens.id, tokenId), eq(apiTokens.projectId, auth.projectId))
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    return reply
+      .status(404)
+      .send(createErrorResponse("NOT_FOUND", "Token not found", req.id));
+  }
+  return row;
+});
+
+// ── Admin: Revoke token ─────────────────────────────────────────────
+app.delete("/v1/admin/tokens/:tokenId", async (req, reply) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const { tokenId } = req.params as { tokenId: string };
+  const updated = await db
+    .update(apiTokens)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(apiTokens.id, tokenId),
+        eq(apiTokens.projectId, auth.projectId),
+        isNull(apiTokens.revokedAt)
+      )
+    )
+    .returning({ id: apiTokens.id });
+  if (updated.length === 0) {
+    return reply
+      .status(404)
+      .send(
+        createErrorResponse(
+          "NOT_FOUND",
+          "Token not found or already revoked",
+          req.id
+        )
+      );
+  }
+  await writeAuditLog({
+    auth,
+    action: "admin.token.revoke",
+    resourceType: "token",
+    resourceId: tokenId,
+    requestId: req.id,
+    ip: req.ip,
+  });
+  return { id: tokenId, revoked: true };
+});
+
+// ── Admin: Update token (name/role) ─────────────────────────────────
+app.patch("/v1/admin/tokens/:tokenId", async (req, reply) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const { tokenId } = req.params as { tokenId: string };
+  const body = req.body as Record<string, unknown> | undefined;
+  const name = body && typeof body.name === "string" ? body.name : undefined;
+  const role =
+    body && typeof body.role === "string" && ["admin", "developer", "readonly"].includes(body.role)
+      ? (body.role as "admin" | "developer" | "readonly")
+      : undefined;
+  const expiresAtRaw = body && typeof body.expiresAt === "string" ? body.expiresAt : undefined;
+  if (!name && !role && !expiresAtRaw) {
+    return reply
+      .status(400)
+      .send(
+        createErrorResponse(
+          "VALIDATION_ERROR",
+          "Provide at least one of: name, role, expiresAt",
+          req.id
+        )
+      );
+  }
+  const setFields: Record<string, unknown> = {};
+  if (name) setFields.name = name;
+  if (role) setFields.role = role;
+  if (expiresAtRaw) setFields.expiresAt = new Date(expiresAtRaw);
+  const updated = await db
+    .update(apiTokens)
+    .set(setFields)
+    .where(
+      and(
+        eq(apiTokens.id, tokenId),
+        eq(apiTokens.projectId, auth.projectId),
+        isNull(apiTokens.revokedAt)
+      )
+    )
+    .returning({
+      id: apiTokens.id,
+      name: apiTokens.name,
+      role: apiTokens.role,
+      expiresAt: apiTokens.expiresAt,
+    });
+  if (updated.length === 0) {
+    return reply
+      .status(404)
+      .send(createErrorResponse("NOT_FOUND", "Token not found", req.id));
+  }
+  await writeAuditLog({
+    auth,
+    action: "admin.token.update",
+    resourceType: "token",
+    resourceId: tokenId,
+    requestId: req.id,
+    ip: req.ip,
+    details: { name, role, expiresAt: expiresAtRaw },
+  });
+  return updated[0];
+});
+
+// ── Admin: Rotate token ─────────────────────────────────────────────
+app.post("/v1/admin/tokens/:tokenId/rotate", async (req, reply) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const { tokenId } = req.params as { tokenId: string };
+
+  // Verify the token belongs to this project and is active
+  const existing = await db
+    .select({ id: apiTokens.id, name: apiTokens.name, role: apiTokens.role })
+    .from(apiTokens)
+    .where(
+      and(
+        eq(apiTokens.id, tokenId),
+        eq(apiTokens.projectId, auth.projectId),
+        isNull(apiTokens.revokedAt)
+      )
+    )
+    .limit(1);
+  if (existing.length === 0) {
+    return reply
+      .status(404)
+      .send(createErrorResponse("NOT_FOUND", "Token not found", req.id));
+  }
+
+  // Revoke old token
+  await db
+    .update(apiTokens)
+    .set({ revokedAt: new Date() })
+    .where(eq(apiTokens.id, tokenId));
+
+  // Create new token with same name/role
+  const newTokenPlain = generateApiToken();
+  const newHash = hashToken(newTokenPlain);
+  const inserted = await db
+    .insert(apiTokens)
+    .values({
+      projectId: auth.projectId,
+      name: existing[0]!.name,
+      role: existing[0]!.role,
+      tokenHash: newHash,
+    })
+    .returning({ id: apiTokens.id });
+
+  await writeAuditLog({
+    auth,
+    action: "admin.token.rotate",
+    resourceType: "token",
+    resourceId: tokenId,
+    requestId: req.id,
+    ip: req.ip,
+    details: { newTokenId: inserted[0]?.id },
+  });
+
+  return reply.status(201).send({
+    token: newTokenPlain,
+    tokenId: inserted[0]?.id,
+    previousTokenId: tokenId,
+  });
+});
+
+// ── Admin: List projects ────────────────────────────────────────────
+app.get("/v1/admin/projects", async (req) => {
+  requireRole(req.auth, ["admin"]);
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      createdAt: projects.createdAt,
+    })
+    .from(projects)
+    .orderBy(desc(projects.createdAt));
+  return { items: rows };
+});
+
+// ── Admin: Create project ───────────────────────────────────────────
+app.post("/v1/admin/projects", async (req, reply) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const body = req.body as Record<string, unknown> | undefined;
+  const id =
+    body && typeof body.id === "string" && body.id.length > 0
+      ? body.id
+      : undefined;
+  const name =
+    body && typeof body.name === "string" && body.name.length > 0
+      ? body.name
+      : undefined;
+  if (!id || !name) {
+    return reply
+      .status(400)
+      .send(
+        createErrorResponse(
+          "VALIDATION_ERROR",
+          "id and name are required",
+          req.id
+        )
+      );
+  }
+  await db
+    .insert(projects)
+    .values({ id, name })
+    .onConflictDoNothing({ target: projects.id });
+  await writeAuditLog({
+    auth,
+    action: "admin.project.create",
+    resourceType: "project",
+    resourceId: id,
+    requestId: req.id,
+    ip: req.ip,
+  });
+  return reply.status(201).send({ id, name });
+});
+
+// ── Admin: Audit logs ───────────────────────────────────────────────
+app.get("/v1/admin/audit-logs", async (req) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const query = req.query as Record<string, unknown>;
+  const limit = Math.min(
+    Number(query.limit ?? 50),
+    200
+  );
+  const offset = Number(query.offset ?? 0);
+  const action =
+    typeof query.action === "string" ? query.action : undefined;
+
+  const conditions = [eq(auditLogs.projectId, auth.projectId)];
+  if (action) conditions.push(eq(auditLogs.action, action));
+
+  const rows = await db
+    .select()
+    .from(auditLogs)
+    .where(and(...conditions))
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return { items: rows, limit, offset };
+});
+
+// ── Admin: Get rate limits ──────────────────────────────────────────
+app.get("/v1/admin/rate-limits", async (req) => {
+  requireRole(req.auth, ["admin"]);
+  const rows = await db.select().from(rateLimitConfig);
+  const result: Record<string, number> = {};
+  for (const row of rows) {
+    result[row.role] = row.rpm;
+  }
+  return { limits: result };
+});
+
+// ── Admin: Update rate limits ───────────────────────────────────────
+app.put("/v1/admin/rate-limits", async (req, reply) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const body = req.body as Record<string, unknown> | undefined;
+  const limits = body && typeof body.limits === "object" ? body.limits as Record<string, unknown> : undefined;
+  if (!limits) {
+    return reply
+      .status(400)
+      .send(
+        createErrorResponse(
+          "VALIDATION_ERROR",
+          'Provide { "limits": { "admin": 500, "developer": 120, "readonly": 60 } }',
+          req.id
+        )
+      );
+  }
+  const validRoles = ["admin", "developer", "readonly"];
+  for (const [role, rpm] of Object.entries(limits)) {
+    if (!validRoles.includes(role) || typeof rpm !== "number" || rpm < 1 || rpm > 10000) {
+      continue;
+    }
+    await db
+      .insert(rateLimitConfig)
+      .values({ role: role as "admin" | "developer" | "readonly", rpm, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: rateLimitConfig.role,
+        set: { rpm, updatedAt: new Date() },
+      });
+    // Update in-memory cache
+    roleLimits[role] = rpm;
+  }
+  await writeAuditLog({
+    auth,
+    action: "admin.rate-limits.update",
+    resourceType: "rate-limits",
+    resourceId: "global",
+    requestId: req.id,
+    ip: req.ip,
+    details: { limits },
+  });
+  return { limits: roleLimits };
+});
+
+// ── Admin: Dashboard stats ──────────────────────────────────────────
+app.get("/v1/admin/stats", async (req) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const pid = auth.projectId;
+
+  const [jobStats] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      queued: sql<number>`count(*) filter (where ${jobs.state} = 'queued')::int`,
+      running: sql<number>`count(*) filter (where ${jobs.state} = 'running')::int`,
+      succeeded: sql<number>`count(*) filter (where ${jobs.state} = 'succeeded')::int`,
+      failed: sql<number>`count(*) filter (where ${jobs.state} = 'failed')::int`,
+    })
+    .from(jobs)
+    .where(eq(jobs.projectId, pid));
+
+  const [crawlStats] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      running: sql<number>`count(*) filter (where ${crawlRuns.state} = 'running')::int`,
+    })
+    .from(crawlRuns)
+    .where(eq(crawlRuns.projectId, pid));
+
+  const [tokenStats] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      active: sql<number>`count(*) filter (where ${apiTokens.revokedAt} is null)::int`,
+    })
+    .from(apiTokens)
+    .where(eq(apiTokens.projectId, pid));
+
+  const [artifactStats] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      totalBytes: sql<number>`coalesce(sum(${artifacts.byteSize}), 0)::bigint`,
+    })
+    .from(artifacts)
+    .where(eq(artifacts.projectId, pid));
+
+  return {
+    jobs: jobStats,
+    crawls: crawlStats,
+    tokens: tokenStats,
+    artifacts: artifactStats,
+  };
+});
+
+// ── Admin: List jobs ────────────────────────────────────────────────
+app.get("/v1/admin/jobs", async (req) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const query = req.query as Record<string, unknown>;
+  const limit = Math.min(Number(query.limit ?? 50), 200);
+  const offset = Number(query.offset ?? 0);
+  const state = typeof query.state === "string" ? query.state : undefined;
+
+  const conditions = [eq(jobs.projectId, auth.projectId)];
+  if (state) conditions.push(eq(jobs.state, state as typeof jobs.state.enumValues[number]));
+
+  const rows = await db
+    .select({
+      id: jobs.id,
+      state: jobs.state,
+      url: jobs.url,
+      attempts: jobs.attempts,
+      maxAttempts: jobs.maxAttempts,
+      errorMessage: jobs.errorMessage,
+      createdAt: jobs.createdAt,
+      updatedAt: jobs.updatedAt,
+    })
+    .from(jobs)
+    .where(and(...conditions))
+    .orderBy(desc(jobs.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return { items: rows, limit, offset };
+});
+
+// ── Admin: List crawls ──────────────────────────────────────────────
+app.get("/v1/admin/crawls", async (req) => {
+  const auth = requireRole(req.auth, ["admin"]);
+  const query = req.query as Record<string, unknown>;
+  const limit = Math.min(Number(query.limit ?? 50), 200);
+  const offset = Number(query.offset ?? 0);
+
+  const rows = await db
+    .select({
+      id: crawlRuns.id,
+      seed: crawlRuns.seed,
+      state: crawlRuns.state,
+      stats: crawlRuns.stats,
+      errorMessage: crawlRuns.errorMessage,
+      createdAt: crawlRuns.createdAt,
+      updatedAt: crawlRuns.updatedAt,
+    })
+    .from(crawlRuns)
+    .where(eq(crawlRuns.projectId, auth.projectId))
+    .orderBy(desc(crawlRuns.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return { items: rows, limit, offset };
+});
+
+// Dashboard is served as a separate container — see docker/dashboard.Dockerfile
 
 app.listen({ port: PORT, host: "0.0.0.0" });
 

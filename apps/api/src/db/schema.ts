@@ -53,6 +53,7 @@ export const apiTokens = pgTable(
       .defaultNow()
       .notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
   },
   (table) => ({
     tokenHashUnique: uniqueIndex("api_tokens_token_hash_unique").on(
@@ -295,6 +296,14 @@ export const auditLogs = pgTable(
     actionIdx: index("audit_logs_action_idx").on(table.action),
   })
 );
+
+export const rateLimitConfig = pgTable("rate_limit_config", {
+  role: roleEnum("role").primaryKey(),
+  rpm: integer("rpm").notNull().default(120),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
 
 export const browserProfiles = pgTable("browser_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),

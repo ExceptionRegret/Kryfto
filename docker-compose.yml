@@ -20,6 +20,15 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/dashboard.Dockerfile
+    ports:
+      - "${KRYFTO_DASHBOARD_PORT:-3001}:3001"
+    depends_on:
+      - api
+
   worker:
     build:
       context: .
